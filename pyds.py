@@ -354,17 +354,22 @@ class MassFunction(dict):
         Computes the weight function corresponding to this mass function.
         """
         weights = {}
-        q = self.q()
         theta = self.frame()
         for h in powerset(theta):
             if len(h) < len(theta):  # weight is undefined for theta
                 sets = [h | c for c in powerset(theta - h)]
-                q_even = reduce(mul, [q[h2] for h2 in sets if len(h2) % 2 == 0], 1.0)
-                q_odd = reduce(mul, [q[h2] for h2 in sets if len(h2) % 2 == 1], 1.0)
+                # Use self.q(h2) directly to avoid KeyError when core doesn't span full frame
+                q_even = reduce(
+                    mul, [self.q(h2) for h2 in sets if len(h2) % 2 == 0], 1.0
+                )
+                q_odd = reduce(
+                    mul, [self.q(h2) for h2 in sets if len(h2) % 2 == 1], 1.0
+                )
+                # Use inf when denominator is zero (fully conflicting evidence)
                 if len(h) % 2 == 0:
-                    weights[h] = q_odd / q_even
+                    weights[h] = q_odd / q_even if q_even != 0.0 else float("inf")
                 else:
-                    weights[h] = q_even / q_odd
+                    weights[h] = q_even / q_odd if q_odd != 0.0 else float("inf")
         return weights
 
     def combine_conjunctive(
@@ -429,7 +434,8 @@ class MassFunction(dict):
         theta = self.frame()
         m = MassFunction({theta: 1.0})
         for h, w in w_min.items():
-            m_simple = MassFunction({theta: w, h: 1.0 - w})
+            # Clamp to 0.0 to handle floating point imprecision where w is marginally > 1.0
+            m_simple = MassFunction({theta: w, h: max(0.0, 1.0 - w)})
             m = m.combine_conjunctive(m_simple, normalization=False)
         return m
 
