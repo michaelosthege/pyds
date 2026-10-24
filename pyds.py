@@ -5,7 +5,7 @@ A framework for performing computations in the Dempster-Shafer theory.
 import sys
 from functools import partial, reduce
 from itertools import chain, combinations
-from math import fsum, log, sqrt
+from math import fsum, log, log2, sqrt
 from operator import mul
 from random import random, shuffle, uniform
 
@@ -709,7 +709,7 @@ class MassFunction(dict):
         c = 0.0
         for h, v in self.items():
             if v > 0.0:
-                c += v * log(len(h) / v, 2)
+                c += v * log2(len(h) / v)
         return c
 
     def hartley_measure(self):
@@ -720,7 +720,7 @@ class MassFunction(dict):
         G. J. Klir (1999), "Uncertainty and information measures for imprecise probabilities: An overview",
         International Symposium on Imprecise Probabilities and Their Applications.
         """
-        return fsum([v * log(len(h), 2) for h, v in self.items()])
+        return fsum([v * log2(len(h)) for h, v in self.items()])
 
     def norm(self, m, p=2):
         """

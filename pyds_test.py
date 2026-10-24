@@ -5,7 +5,7 @@ Unit tests for "pyds.py".
 import random
 import unittest
 from itertools import product
-from math import isnan, log
+from math import isnan, log, log2
 
 from pyds import MassFunction, gbt_bel, gbt_m, gbt_pignistic, gbt_pl, gbt_q, powerset
 
@@ -302,20 +302,20 @@ class PyDSTest(unittest.TestCase):
         self.assertEqual(0.35 / 0.6, p3["c"])
 
     def test_local_conflict(self):
-        c = 0.5 * log(1 / 0.5, 2) + 0.2 * log(1 / 0.2, 2) + 0.3 * log(2 / 0.3, 2)
+        c = 0.5 * log2(1 / 0.5) + 0.2 * log2(1 / 0.2) + 0.3 * log2(2 / 0.3)
         self.assertEqual(c, self.m2.local_conflict())
         self.assertTrue(isnan(self.m3.local_conflict()))
         # pignistic entropy
         h = (
-            -0.125 * log(0.125, 2)
-            - 0.075 * log(0.075, 2)
-            - 0.275 * log(0.275, 2)
-            - 0.525 * log(0.525, 2)
+            -0.125 * log2(0.125)
+            - 0.075 * log2(0.075)
+            - 0.275 * log2(0.275)
+            - 0.525 * log2(0.525)
         )
         self.assertAlmostEqual(h, self.m1.pignistic().local_conflict())
 
     def test_hartley_measure(self):
-        self.assertEqual(0.1 + 0.3 * log(4, 2), self.m1.hartley_measure())
+        self.assertEqual(0.1 + 0.3 * log2(4), self.m1.hartley_measure())
 
     def test_norm(self):
         self.assertEqual(0, self.m1.norm(self.m1))
