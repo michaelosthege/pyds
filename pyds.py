@@ -208,7 +208,7 @@ class MassFunction(dict):
         In case of a negative mass value, a ValueError is raised.
         """
         if value < 0.0:
-            raise ValueError("mass value is negative: %f" % value)
+            raise ValueError(f"mass value is negative: {value:f}")
         dict.__setitem__(self, MassFunction._convert(hypothesis), value)
 
     def __delitem__(self, hypothesis):
@@ -353,7 +353,7 @@ class MassFunction(dict):
         """
         Computes the weight function corresponding to this mass function.
         """
-        weights = dict()
+        weights = {}
         q = self.q()
         theta = self.frame()
         for h in powerset(theta):
@@ -443,8 +443,7 @@ class MassFunction(dict):
         for m in mass_function:
             if not isinstance(m, MassFunction):
                 raise TypeError(
-                    "expected type MassFunction but got %s; make sure to use keyword arguments for anything other than mass functions"
-                    % type(m)
+                    f"expected type MassFunction but got {type(m)}; make sure to use keyword arguments for anything other than mass functions"
                 )
             if sample_count == None:
                 combined = combined._combine_deterministic(m, rule)
@@ -1027,7 +1026,7 @@ class MassFunction(dict):
             return MassFunction._from_samples_mcd(histogram, alpha)
         elif method == "mcd-approximate":
             return MassFunction._from_samples_mcd(histogram, alpha, approximate=True)
-        raise ValueError("unknown method: %s" % method)
+        raise ValueError(f"unknown method: {method}")
 
     @staticmethod
     def _from_samples_idm(histogram, s):
@@ -1252,9 +1251,7 @@ def gbt_pignistic(singleton, likelihoods):
         else:
             lh_values.append(v)
     if singleton_lh is None:
-        raise ValueError(
-            "singleton %s is not contained in likelihoods" % repr(singleton)
-        )
+        raise ValueError(f"singleton {singleton!r} is not contained in likelihoods")
     m_sum = _gbt_pignistic_recursive(lh_values, 0)
     eta = _gbt_normalization(likelihoods)
     return sum([eta * v * singleton_lh / (c + 1.0) for c, v in enumerate(m_sum)])
