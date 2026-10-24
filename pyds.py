@@ -642,7 +642,7 @@ class MassFunction(dict):
                     if predicted == None:
                         predicted = transition_model(e)
                     else:
-                        predicted |= transition_model(e)
+                        predicted = predicted.combine_disjunctive(transition_model(e))
                 for kp, vp in predicted.items():
                     updated[kp] += v * vp
         else:  # Monte-Carlo
