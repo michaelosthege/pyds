@@ -25,15 +25,15 @@ def stats(results):
 
 def measure_time(f, *args, **kwargs):
     def f_measured(i):
-        t = time.clock()
+        t = time.perf_counter()
         f(*args, **kwargs)
-        return time.clock() - t
+        return time.perf_counter() - t
 
     return stats(map(f_measured, range(iterations)))
 
 
 def measure_error(actual, f, *args, **kwargs):
-    return stats(map(lambda _: actual.norm(f(*args, **kwargs)), range(iterations)))
+    return stats(actual.norm(f(*args, **kwargs)) for _ in range(iterations))
 
 
 def random_likelihoods(singleton_count):
@@ -243,17 +243,20 @@ def error_combine_gbt_1000_imp():
 
 
 def run_measures(prefix):
+    """Benchmarks all functions in this module that are named `{prefix}_*`."""
     mod = sys.modules[__name__]
     filt = lambda x: (
         inspect.isfunction(x)
         and inspect.getmodule(x) == mod
         and x.__name__.startswith(prefix + "_")
     )
-    print("%-32s%-6s (%4s)" % ("function", "mean", "stddev"))
-    print("-" * 50)
+    print("function                        mean   (stddev)")
+    print("-----------------------------------------------")
     for f in sorted(filter(filt, globals().copy().values()), key=str):
         random.seed(0)
-        print("%-32s%.4f (+-%.4f)" % ((f.__name__[len(prefix) + 1 :],) + f()))
+        fname = f.__name__[len(prefix) + 1 :]
+        mean, stddev = f()
+        print(f"{fname.ljust(31)} {mean:.4f} (+-{stddev:.4f})")
 
 
 if __name__ == "__main__":
