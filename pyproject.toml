@@ -1,0 +1,51 @@
+[project]
+name = "pyds"
+version = "0.7.0"
+description = "Dempster-Shafer theory library"
+readme = "README.md"
+authors = [
+    { name = "Thomas Reineking", email = "nikenier@gmail.com" },
+]
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Topic :: Scientific/Engineering",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+]
+keywords = [
+    "Dempster-Shafer",
+    "belief functions",
+]
+requires-python = ">=3.11"
+dependencies = [
+]
+
+[dependency-groups]
+dev = [
+    "numpy",
+    "pre-commit",
+    "pytest",
+    "pytest-cov",
+    "scipy",
+]
+
+[project.urls]
+homepage = "https://github.com/reineking/pyds"
+repository = "https://github.com/reineking/pyds"
+documentation = "https://github.com/reineking/pyds"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["pyds"]
+
+[tool.coverage.run]
+omit = [
+    # exclude tests files from coverage calculation
+    "**/test*.py"
+]
