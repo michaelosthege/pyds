@@ -15,10 +15,14 @@ try:
     try:
         from scipy.optimize import fmin_cobyla
         from scipy.stats import chi2
-    except:
+    except ModuleNotFoundError:
         print("SciPy not found: some features will not work.", file=sys.stderr)
-except:
+except ModuleNotFoundError:
     print("NumPy not found: some features will not work.", file=sys.stderr)
+
+
+class NotProbabilisticError(Exception):
+    """Indicates that a mass function is missspecified."""
 
 
 class MassFunction(dict):
@@ -851,7 +855,7 @@ class MassFunction(dict):
     def to_dict(self):
         """Convert a mass function only consisting of singletons to a dictionary by removing each enclosing frozenset."""
         if not self.is_probabilistic():
-            raise Exception("mass function must only contain singletons")
+            raise NotProbabilisticError("mass function must only contain singletons")
         return {tuple(h)[0]: v for h, v in self.items()}
 
     @staticmethod
