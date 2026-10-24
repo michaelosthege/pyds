@@ -44,7 +44,7 @@ class PyDSTest(unittest.TestCase):
 
     def test_copy(self):
         c = self.m1.copy()
-        for k in self.m1.keys():
+        for k in self.m1:
             self.assertEqual(self.m1.bel(k), c.bel(k))
         c["a"] = 0.3
         # assert that the original object remains unchanged
@@ -677,7 +677,7 @@ class PyDSTest(unittest.TestCase):
         likelihoods = {"a": 0.3, "b": 0.8, "c": 0.0, "d": 0.5, "e": 1.0}
         p = MassFunction.gbt(likelihoods).pignistic()
         for s in p:
-            self.assertAlmostEqual(p[s], gbt_pignistic(tuple(s)[0], likelihoods), 8)
+            self.assertAlmostEqual(p[s], gbt_pignistic(next(iter(s)), likelihoods), 8)
 
     def test_multiplication(self):
         product = 0.5 * self.m1

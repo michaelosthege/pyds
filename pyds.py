@@ -137,7 +137,7 @@ class MassFunction(dict):
         'bel' is a dictionary mapping hypotheses to belief values (like the dictionary returned by 'bel(None)').
         """
         m = MassFunction()
-        for h1 in bel.keys():
+        for h1 in bel:
             v = fsum([bel[h2] * (-1) ** (len(h1 - h2)) for h2 in powerset(h1)])
             if v > 0:
                 m[h1] = v
@@ -169,7 +169,7 @@ class MassFunction(dict):
         """
         m = MassFunction()
         frame = max(q.keys(), key=len)
-        for h1 in q.keys():
+        for h1 in q:
             v = fsum(
                 [q[h1 | h2] * (-1) ** (len(h2 - h1)) for h2 in powerset(frame - h1)]
             )
@@ -742,7 +742,7 @@ class MassFunction(dict):
         Compatibility means that the mass value of each hypothesis in 'm' is less than
         or equal to the corresponding plausibility given by this mass function.
         """
-        return all([self.pl(h) >= v for (h, v) in m.items()])
+        return all(self.pl(h) >= v for (h, v) in m.items())
 
     def sample(self, n, quantization=True, as_dict=False):
         """
@@ -804,7 +804,7 @@ class MassFunction(dict):
 
         Returns True if and only if all hypotheses are singletons (normalization is ignored).
         """
-        return all([len(h) == 1 for h in self.keys()])
+        return all(len(h) == 1 for h in self.keys())
 
     def sample_probability_distributions(self, n):
         """
@@ -856,7 +856,7 @@ class MassFunction(dict):
         """Convert a mass function only consisting of singletons to a dictionary by removing each enclosing frozenset."""
         if not self.is_probabilistic():
             raise NotProbabilisticError("mass function must only contain singletons")
-        return {tuple(h)[0]: v for h, v in self.items()}
+        return {next(iter(h)): v for h, v in self.items()}
 
     @staticmethod
     def from_dict(d):
@@ -896,9 +896,7 @@ class MassFunction(dict):
         International Journal of Approximate Reasoning 48 (2), 352-364.
         """
         p = MassFunction.from_dict(p)
-        poss = MassFunction(
-            {h1: fsum([min(p[h1], p[h2]) for h2 in p.keys()]) for h1 in p.keys()}
-        )
+        poss = MassFunction({h1: fsum([min(p[h1], p[h2]) for h2 in p]) for h1 in p})
         return MassFunction.from_possibility(poss)
 
     @staticmethod
