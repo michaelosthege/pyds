@@ -1,3 +1,5 @@
+[![pipeline](https://github.com/michaelosthege/pyds/workflows/tests/badge.svg)](https://github.com/michaelosthege/pyds/actions)
+
 A Python library for performing calculations in the Dempster-Shafer theory of evidence.
 
 Written by https://github.com/reineking/pyds, refactored for a modern Python project structure.
