@@ -1158,12 +1158,23 @@ class MassFunction(dict):
                     cons.append(lambda p: sum(p) - 1.0)
                     # constraint (30)
                     for i in G:
-                        cons.append(partial(lambda p, i_s: p[i_s] - p[k], i_s=i))
+                        cons.append(
+                            partial(lambda p, i_s, k: p[i_s] - p[k], i_s=i, k=k)
+                        )
                     # constraint (31)
                     for i in G_c:
-                        cons.append(partial(lambda p, i_s: p[k] - p[i_s], i_s=i))
+                        cons.append(
+                            partial(lambda p, i_s, k: p[k] - p[i_s], i_s=i, k=k)
+                        )
                     initial = [1.0 / len(H)] * len(H)
-                    f = lambda p: -(fsum([p[i] for i in G_c]) + len(G) * p[k])
+                    f = partial(
+                        lambda p, G_c, G, k: (
+                            -(fsum([p[i] for i in G_c]) + len(G) * p[k])
+                        ),
+                        G_c=G_c,
+                        G=G,
+                        k=k,
+                    )
                     poss_optimal = fmin_cobyla(f, initial, cons, disp=0)
                     poss[h_k] = max(poss[h_k], -f(poss_optimal))
         return MassFunction.from_possibility(poss)
