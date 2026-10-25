@@ -3,7 +3,7 @@ A framework for performing computations in the Dempster-Shafer theory.
 """
 
 import sys
-from functools import partial, reduce
+from functools import reduce
 from itertools import chain, combinations
 from math import fsum, log, log2, sqrt
 from operator import mul
@@ -13,12 +13,14 @@ try:
     import numpy
 
     try:
-        from scipy.optimize import fmin_cobyla
+        from scipy.optimize import linprog
         from scipy.stats import chi2
     except ModuleNotFoundError:
         print("SciPy not found: some features will not work.", file=sys.stderr)
 except ModuleNotFoundError:
     print("NumPy not found: some features will not work.", file=sys.stderr)
+
+LP_ZERO_TOLERANCE = 1e-12
 
 
 class NotProbabilisticError(Exception):
@@ -1088,30 +1090,47 @@ class MassFunction(dict):
         else:
             H = list(histogram.keys())
             L = 2 ** len(H)
-            initial = numpy.zeros(L)
-            cons = []
-            singletons = lambda index: [i for i in range(len(H)) if 2**i & index]
-            # constraint (24)
-            bel = lambda index, m: fsum(
-                m[sum([2**i for i in h_ind])] for h_ind in powerset(singletons(index))
+
+            def singletons(index):
+                return [i for i in range(len(H)) if 2**i & index]
+
+            # Objective: maximize sum_i m_i * 2^(-|i|)
+            # linprog minimizes, so use negative coefficients
+            c = numpy.array(
+                [-(2.0 ** (-len(singletons(i)))) for i in range(L)],
+                dtype=float,
             )
-            c24 = lambda m, i: (
-                p_lower_set(MassFunction._from_array_index(i, H)) - bel(i, m)
-            )
+
+            # Constraint (24): bel(A_i) <= p_lower_set(A_i)
+            A_ub = numpy.zeros((L, L), dtype=float)
+            b_ub = numpy.zeros(L, dtype=float)
+
             for i in range(L):
-                cons.append(partial(c24, i=i))
-            # constraint (25)
-            cons.append(lambda m: m.sum() - 1.0)
-            cons.append(lambda m: 1.0 - m.sum())
-            # constraint (26)
-            for i in range(L):
-                cons.append(partial(lambda m, i_s: m[i_s], i_s=i))
-            f = lambda m: (
-                -1
-                * 2 ** len(H)
-                * fsum([m[i] * 2 ** (-len(singletons(i))) for i in range(L)])
+                for j in range(L):
+                    if (j & i) == j:
+                        A_ub[i, j] = 1.0
+                b_ub[i] = p_lower_set(MassFunction._from_array_index(i, H))
+
+            # Constraint (25): sum_A m(A) = 1
+            A_eq = numpy.ones((1, L), dtype=float)
+            b_eq = numpy.array([1.0], dtype=float)
+
+            result = linprog(
+                c,
+                A_ub=A_ub,
+                b_ub=b_ub,
+                A_eq=A_eq,
+                b_eq=b_eq,
+                bounds=(0.0, None),  # Constraint (26): m(A) >= 0
+                method="highs",
             )
-            m_optimal = fmin_cobyla(f, initial, cons, disp=0)
+
+            if not result.success:
+                raise ValueError(f"maxbel linear program failed: {result.message}")
+
+            m_optimal = numpy.maximum(result.x, 0.0)
+            m_optimal[m_optimal < LP_ZERO_TOLERANCE] = 0.0
+
             return MassFunction.from_array(m_optimal, H)
 
     @staticmethod
@@ -1123,6 +1142,7 @@ class MassFunction(dict):
         """
         p_lower, p_upper = MassFunction._confidence_intervals(histogram, alpha)
         H = list(histogram.keys())
+
         if approximate:
             # approximate possibility distribution
             poss = {
@@ -1132,51 +1152,85 @@ class MassFunction(dict):
         else:
             # optimal possibility distribution (based on linear programming)
             poss = {h: 0.0 for h in H}
+            n = len(H)
+
+            # Constraint (26)
+            bounds = [(p_lower[h], p_upper[h]) for h in H]
+
+            # Constraint (27): sum(p) == 1
+            A_eq = numpy.ones((1, n), dtype=float)
+            b_eq = numpy.array([1.0], dtype=float)
+
             for k, h_k in enumerate(H):
-                S_k = {l for l in range(len(H)) if p_lower[H[l]] >= p_upper[h_k]}
+                S_k = {l for l in range(n) if p_lower[H[l]] >= p_upper[h_k]}
                 S_k.add(k)
-                I_k = {l for l in range(len(H)) if p_upper[H[l]] < p_lower[h_k]}
-                P_k = set(range(len(H))).difference(S_k.union(I_k))
+                I_k = {l for l in range(n) if p_upper[H[l]] < p_lower[h_k]}
+                P_k = set(range(n)).difference(S_k.union(I_k))
+
                 for A in powerset(P_k):
                     G = S_k.union(A)
-                    G_c = set(range(len(H))).difference(G)
-                    cons = []
-                    # constraint (26)
-                    for i, h in enumerate(H):
-                        cons.append(
-                            partial(
-                                lambda p, i_s, p_s: p[i_s] - p_s, i_s=i, p_s=p_lower[h]
-                            )
-                        )  # lower bound
-                        cons.append(
-                            partial(
-                                lambda p, i_s, p_s: p_s - p[i_s], i_s=i, p_s=p_upper[h]
-                            )
-                        )  # upper bound
-                    # constraint (27)
-                    cons.append(lambda p: 1.0 - sum(p))
-                    cons.append(lambda p: sum(p) - 1.0)
-                    # constraint (30)
-                    for i in G:
-                        cons.append(
-                            partial(lambda p, i_s, k: p[i_s] - p[k], i_s=i, k=k)
-                        )
-                    # constraint (31)
+                    G_c = set(range(n)).difference(G)
+
+                    # Objective: maximize sum_{i in G_c} p_i + len(G) * p_k
+                    # linprog minimizes, so use negative coefficients
+                    c = numpy.zeros(n, dtype=float)
                     for i in G_c:
-                        cons.append(
-                            partial(lambda p, i_s, k: p[k] - p[i_s], i_s=i, k=k)
-                        )
-                    initial = [1.0 / len(H)] * len(H)
-                    f = partial(
-                        lambda p, G_c, G, k: (
-                            -(fsum([p[i] for i in G_c]) + len(G) * p[k])
-                        ),
-                        G_c=G_c,
-                        G=G,
-                        k=k,
+                        c[i] -= 1.0
+                    c[k] -= float(len(G))
+
+                    rows = []
+                    rhs = []
+
+                    # Constraint (30): p_i >= p_k for i in G
+                    # as: p_k - p_i <= 0
+                    for i in G:
+                        if i == k:
+                            continue
+                        row = numpy.zeros(n, dtype=float)
+                        row[k] = 1.0
+                        row[i] = -1.0
+                        rows.append(row)
+                        rhs.append(0.0)
+
+                    # Constraint (31): p_k >= p_i for i in G_c
+                    # as: p_i - p_k <= 0
+                    for i in G_c:
+                        row = numpy.zeros(n, dtype=float)
+                        row[i] = 1.0
+                        row[k] = -1.0
+                        rows.append(row)
+                        rhs.append(0.0)
+
+                    A_ub = numpy.array(rows, dtype=float) if rows else None
+                    b_ub = numpy.array(rhs, dtype=float) if rows else None
+
+                    result = linprog(
+                        c,
+                        A_ub=A_ub,
+                        b_ub=b_ub,
+                        A_eq=A_eq,
+                        b_eq=b_eq,
+                        bounds=bounds,
+                        method="highs",
                     )
-                    poss_optimal = fmin_cobyla(f, initial, cons, disp=0)
-                    poss[h_k] = max(poss[h_k], -f(poss_optimal))
+
+                    if result.success:
+                        poss[h_k] = max(poss[h_k], -float(result.fun))
+                    elif result.status == 2:
+                        # Infeasible subset, skip it.
+                        continue
+                    else:
+                        raise ValueError(
+                            f"mcd linear program failed for event {h_k!r}: {result.message}"
+                        )
+
+            # Possibility values should lie in [0, 1].
+            for h in poss:
+                if poss[h] < 0.0:
+                    poss[h] = 0.0
+                elif poss[h] > 1.0:
+                    poss[h] = 1.0
+
         return MassFunction.from_possibility(poss)
 
 
