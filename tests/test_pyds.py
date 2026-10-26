@@ -5,11 +5,11 @@ Unit tests for "pyds.py".
 import random
 import unittest
 from itertools import product
-from math import isnan, log, log2
-
-import pytest
+from math import fsum, isnan, log, log2
 
 from pyds import MassFunction, gbt_bel, gbt_m, gbt_pignistic, gbt_pl, gbt_q, powerset
+
+LP_FEASIBILITY_TOLERANCE = 1e-9
 
 
 def get_precipitation_data():
@@ -553,7 +553,6 @@ class PyDSTest(unittest.TestCase):
             p = hist[h] / float(sum(hist.values()))
             self.assertAlmostEqual(2.0 * p - lower[h], p_u, places=1)
 
-    @pytest.mark.xfail(reason="Looks like float precision issue.")
     def test_from_samples_maxbel(self):
         """
         Example 1 (maxbel) and example 7 (ordered) from:
@@ -578,10 +577,16 @@ class PyDSTest(unittest.TestCase):
         for h in m.all():
             bel = m.bel(h)
             bel_sum += bel
-            self.assertLessEqual(bel, p_lower_set(h))  # constraint (24)
-        self.assertEqual(1, sum(m.values()))  # constraint (25)
+            self.assertLessEqual(
+                bel, p_lower_set(h) + LP_FEASIBILITY_TOLERANCE
+            )  # constraint (24)
+        self.assertAlmostEqual(
+            1, fsum(m.values()), delta=LP_FEASIBILITY_TOLERANCE
+        )  # constraint (25)
         self.assertGreaterEqual(min(m.values()), 0)  # constraint (26)
-        self.assertGreaterEqual(bel_sum, 6.23)  # optimization criterion
+        self.assertGreaterEqual(
+            bel_sum, 6.23 - LP_FEASIBILITY_TOLERANCE
+        )  # optimization criterion
 
     def test_from_samples_maxbel_ordered(
         self,
@@ -611,7 +616,6 @@ class PyDSTest(unittest.TestCase):
         self.assertAlmostEqual(0.012, m[range(2, 6)], 2)
         self.assertAlmostEqual(0.14, m[range(2, 7)], 2)
 
-    @pytest.mark.xfail(reason="Looks like float precision issue.")
     def test_from_samples_mcd(self):
         """
         Example 6 (mcd) from:
