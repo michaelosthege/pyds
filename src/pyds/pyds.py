@@ -71,7 +71,9 @@ class MassFunction(dict[frozenset[K], float]):
 
     @staticmethod
     def gbt(
-        likelihoods, normalization: bool = True, sample_count: int | None = None
+        likelihoods: Mapping[frozenset[K], float] | Iterable[tuple[Iterable[K], float]],
+        normalization: bool = True,
+        sample_count: int | None = None,
     ) -> "MassFunction[K]":
         """
         Constructs a mass function using the generalized Bayesian theorem.
@@ -89,6 +91,7 @@ class MassFunction(dict[frozenset[K], float]):
         m = MassFunction[K]()
         if isinstance(likelihoods, dict):
             likelihoods = list(likelihoods.items())
+        assert isinstance(likelihoods, list)
         # filter trivial likelihoods 0 and 1
         ones = [h for (h, l) in likelihoods if l >= 1.0]
         likelihoods = [(h, l) for (h, l) in likelihoods if 0.0 < l < 1.0]
@@ -593,7 +596,7 @@ class MassFunction(dict[frozenset[K], float]):
                         if l / norm > rv[k]:
                             # possible bug? h is a hypothesis,
                             # but hyp is used as a hypothesis too
-                            hyp.add(h)  # type: ignore
+                            hyp = hyp.union(h)
                         else:
                             subtree_mass *= 1.0 - l  # only relevant for negative case
                     if importance_sampling:
