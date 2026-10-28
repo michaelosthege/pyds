@@ -70,8 +70,17 @@ class MassFunction(dict[frozenset[K], float]):
         return frozenset(hypothesis)
 
     @staticmethod
+    def _gbt_likelihoods(
+        likelihoods: Mapping[K, float] | Iterable[tuple[K, float]],
+    ) -> list[tuple[K, float]]:
+        """Normalize input into a list of `(hypothesis, likelihood)` pairs."""
+        if isinstance(likelihoods, Mapping):
+            return list(likelihoods.items())
+        return list(likelihoods)
+
+    @staticmethod
     def gbt(
-        likelihoods: Mapping[frozenset[K], float] | Iterable[tuple[Iterable[K], float]],
+        likelihoods: Mapping[K, float] | Iterable[tuple[K, float]],
         normalization: bool = True,
         sample_count: int | None = None,
     ) -> "MassFunction[K]":
@@ -89,15 +98,21 @@ class MassFunction(dict[frozenset[K], float]):
         If 'sample_count' is not None, the true mass function is approximated using the specified number of samples.
         """
         m = MassFunction[K]()
-        if isinstance(likelihoods, dict):
-            likelihoods = list(likelihoods.items())
-        assert isinstance(likelihoods, list)
-        # filter trivial likelihoods 0 and 1
-        ones = [h for (h, l) in likelihoods if l >= 1.0]
-        likelihoods = [(h, l) for (h, l) in likelihoods if 0.0 < l < 1.0]
-        if sample_count == None:  # deterministic
+        likelihoods = MassFunction._gbt_likelihoods(likelihoods)
 
-            def traverse(m, likelihoods, ones, index, hyp, mass):
+        # filter trivial likelihoods 0 and 1
+        ones: list[K] = [h for (h, l) in likelihoods if l >= 1.0]
+        likelihoods = [(h, l) for (h, l) in likelihoods if 0.0 < l < 1.0]
+        if sample_count is None:  # deterministic
+
+            def traverse(
+                m: "MassFunction[K]",
+                likelihoods: list[tuple[K, float]],
+                ones: list[K],
+                index: int,
+                hyp: list[K],
+                mass: float,
+            ) -> None:
                 if index == len(likelihoods):
                     m[hyp + ones] = mass
                 else:
@@ -127,7 +142,7 @@ class MassFunction(dict[frozenset[K], float]):
             for _ in range(sample_count):
                 rv = [random() for _ in range(len(likelihoods))]
                 subtree_mass = 1.0
-                hyp = set(ones)
+                hyp: set[K] = set(ones)
                 for k in range(len(likelihoods)):
                     l = likelihoods[k][1]
                     p_t = l * subtree_mass
@@ -310,7 +325,7 @@ class MassFunction(dict[frozenset[K], float]):
                 )
 
     @overload
-    def pl(self, hypothesis: None) -> Mapping[frozenset[K], float]: ...
+    def pl(self, hypothesis: None = None) -> Mapping[frozenset[K], float]: ...
 
     @overload
     def pl(self, hypothesis: Iterable[K]) -> float: ...
@@ -491,7 +506,7 @@ class MassFunction(dict[frozenset[K], float]):
                 raise TypeError(
                     f"expected type MassFunction but got {type(m)}; make sure to use keyword arguments for anything other than mass functions"
                 )
-            if sample_count == None:
+            if sample_count is None:
                 combined = combined._combine_deterministic(m, rule)
             else:
                 if importance_sampling and normalization:
@@ -531,11 +546,11 @@ class MassFunction(dict[frozenset[K], float]):
 
     def combine_gbt(
         self,
-        likelihoods: Mapping[frozenset[K], float] | Iterable[tuple[Iterable[K], float]],
+        likelihoods: Mapping[K, float] | Iterable[tuple[K, float]],
         normalization: bool = True,
         sample_count: int | None = None,
         importance_sampling=True,
-    ):
+    ) -> "MassFunction[K]":
         """
         Conjunctively combines the mass function with a mass function obtained from a sequence of
         likelihoods via the generalized Bayesian theorem and returns the combination as a new mass function.
@@ -554,11 +569,9 @@ class MassFunction(dict[frozenset[K], float]):
         See 'combine_conjunctive' for details on the effect of setting 'importance_sampling'.
         """
         core = self.core()  # restrict to generally compatible likelihoods
-        if isinstance(likelihoods, dict):
-            likelihoods = list(likelihoods.items())
-        assert isinstance(likelihoods, list)
+        likelihoods = MassFunction._gbt_likelihoods(likelihoods)
         likelihoods = [l for l in likelihoods if l[1] > 0 and l[0] in core]
-        if sample_count == None:  # deterministic
+        if sample_count is None:  # deterministic
             return self.combine_conjunctive(
                 MassFunction.gbt(likelihoods), normalization=normalization
             )
@@ -585,7 +598,7 @@ class MassFunction(dict[frozenset[K], float]):
                 for _ in range(n):
                     rv = [random() for _ in range(len(compatible_likelihoods))]
                     subtree_mass = 1.0
-                    hyp = set[K]()
+                    hyp: set[K] = set()
                     for k in range(len(compatible_likelihoods)):
                         h, l = compatible_likelihoods[k]
                         norm = (
@@ -594,9 +607,7 @@ class MassFunction(dict[frozenset[K], float]):
                             else 1.0 - empty_mass / subtree_mass
                         )
                         if l / norm > rv[k]:
-                            # possible bug? h is a hypothesis,
-                            # but hyp is used as a hypothesis too
-                            hyp = hyp.union(h)
+                            hyp.add(h)
                         else:
                             subtree_mass *= 1.0 - l  # only relevant for negative case
                     if importance_sampling:
@@ -726,7 +737,7 @@ class MassFunction(dict[frozenset[K], float]):
         This method can be used to implement the prediction step for estimation in a hidden Markov process (hence the name).
         Under this interpretation, the transition model expresses the mass distribution over successor states given the current state.
         """
-        if sample_count == None:  # deterministic
+        if sample_count is None:  # deterministic
             return self.markov_deterministic(transition_model)  # type: ignore
         else:  # Monte-Carlo
             return self.markov_monto_carlo(transition_model, sample_count)  # type: ignore
@@ -824,7 +835,7 @@ class MassFunction(dict[frozenset[K], float]):
         n: int,
         quantization: bool = ...,
         as_dict: Literal[False] = False,
-    ) -> list[frozenset]: ...
+    ) -> list[frozenset[K]]: ...
 
     @overload
     def sample(
@@ -832,11 +843,11 @@ class MassFunction(dict[frozenset[K], float]):
         n: int,
         quantization: bool = ...,
         as_dict: Literal[True] = True,
-    ) -> dict[frozenset, int]: ...
+    ) -> dict[frozenset[K], int]: ...
 
     def sample(
         self, n: int, quantization: bool = True, as_dict: bool = False
-    ) -> list[frozenset] | dict[frozenset, int]:
+    ) -> list[frozenset[K]] | dict[frozenset[K], int]:
         """
         Returns n random samples from the mass distribution.
 
