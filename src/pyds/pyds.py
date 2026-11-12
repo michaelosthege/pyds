@@ -11,6 +11,8 @@ from operator import mul
 from random import random, shuffle, uniform
 from typing import Literal, TypeVar, overload
 
+from pyds.exceptions import NotProbabilisticError
+
 try:
     import numpy
 
@@ -23,11 +25,6 @@ except ModuleNotFoundError:
     print("NumPy not found: some features will not work.", file=sys.stderr)
 
 LP_ZERO_TOLERANCE = 1e-12
-
-
-class NotProbabilisticError(Exception):
-    """Indicates that a mass function is missspecified."""
-
 
 E = TypeVar("E")
 """Type of the elements of the frame of discernment `Θ`."""
