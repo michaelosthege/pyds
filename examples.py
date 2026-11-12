@@ -30,8 +30,8 @@ print(
     "m_3 from bel_3 =", MassFunction.from_bel(m3.bel())
 )  # construct a mass function from a belief function
 
-print("\n=== frame of discernment, focal sets, and core  ===")
-print("frame of discernment of m_1 =", m1.frame())
+print("\n=== implicit frame, focal sets, and core  ===")
+print("implicit frame of m_1 =", m1.implicit_frame())
 print("focal sets of m_1 =", m1.focal())
 print("core of m_1 =", m1.core())
 print("combined core of m_1 and m_3 =", m1.core(m3))
@@ -79,12 +79,12 @@ print(
 )
 
 print("\n=== weight of conflict ===")
-print("weight of conflict between m_1 and m_2 =", m1.conflict(m2))
+print("weight of conflict between m_1 and m_2 =", m1.weight_of_conflict(m2))
 print(
     "weight of conflict between m_1 and m_2 (Monte-Carlo) =",
-    m1.conflict(m2, sample_count=1000),
+    m1.weight_of_conflict(m2, sample_count=1000),
 )
-print("weight of conflict between m_1, m_2, and m_3 =", m1.conflict([m2, m3]))
+print("weight of conflict between m_1, m_2, and m_3 =", m1.weight_of_conflict([m2, m3]))
 
 print("\n=== pignistic transformation ===")
 print("pignistic transformation of m_1 =", m1.pignistic())

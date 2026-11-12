@@ -242,12 +242,15 @@ class MassFunction(dict[frozenset[E], float]):
     def __delitem__(self, hypothesis):
         return dict.__delitem__(self, MassFunction._convert(hypothesis))
 
-    def frame(self) -> frozenset[E]:
-        """
-        Returns the frame of discernment of the mass function as a 'frozenset'.
+    def implicit_frame(self) -> frozenset[E]:
+        """Returns the union of all stored hypotheses as a `frozenset`, or an empty `frozenset` if there are none.
 
-        The frame of discernment is the union of all contained hypotheses.
-        In case the mass function does not contain any hypotheses, an empty set is returned.
+        This is a lower bound on Θ, not Θ itself: a mass function does not store its frame of discernment, so m({x}) = 1
+        over Θ = {x, y, z} yields {x}. Unlike :meth:`core`, hypotheses with zero mass contribute their elements too.
+
+        The union is non-increasing under :meth:`combine_conjunctive`, since focal sets are intersected. That correctly describes
+        the resulting belief, but makes this method unsuitable as a source of Θ for operations that place mass on the top set:
+        pass Θ explicitly to :meth:`simple_support` and :meth:`expand_frame`.
         """
         if not self:
             return frozenset()
@@ -258,10 +261,10 @@ class MassFunction(dict[frozenset[E], float]):
         """
         Returns the set of all singleton hypotheses.
 
-        Like 'frame()', except that each singleton is wrapped in a frozenset
-        and can thus be directly passed to methods like 'bel()'.
+        Like :meth:`implicit_frame`, except that each singleton is wrapped in a `frozenset`
+        and can thus be directly passed to methods like :meth:`bel`.
         """
-        return {frozenset((s,)) for s in self.frame()}
+        return {frozenset((s,)) for s in self.implicit_frame()}
 
     def focal(self) -> set[frozenset[E]]:
         """
@@ -291,8 +294,8 @@ class MassFunction(dict[frozenset[E], float]):
                 return frozenset.union(*focal)
 
     def all(self):
-        """Returns an iterator over all subsets of the frame of discernment, including the empty set."""
-        return powerset(self.frame())
+        """Returns an iterator over all subsets of the implicit frame, including the empty set."""
+        return powerset(self.implicit_frame())
 
     @overload
     def bel(self, hypothesis: None = None) -> Mapping[frozenset[E], float]: ...
@@ -406,7 +409,7 @@ class MassFunction(dict[frozenset[E], float]):
         Computes the weight function corresponding to this mass function.
         """
         weights = {}
-        theta = self.frame()
+        theta = self.implicit_frame()
         for h in powerset(theta):
             if len(h) < len(theta):  # weight is undefined for theta
                 sets = [h | c for c in powerset(theta - h)]
@@ -483,7 +486,7 @@ class MassFunction(dict[frozenset[E], float]):
         w1 = self.weight_function()
         w2 = mass_function.weight_function()
         w_min = {h: min(w1[h], w2[h]) for h in w1}
-        theta = self.frame()
+        theta = self.implicit_frame()
         m = MassFunction({theta: 1.0})
         for h, w in w_min.items():
             # Clamp to 0.0 to handle floating point imprecision where w is marginally > 1.0
@@ -627,7 +630,7 @@ class MassFunction(dict[frozenset[E], float]):
         m = MassFunction({MassFunction._convert(hypothesis): 1.0})
         return self.combine_conjunctive(m, normalization=normalization)
 
-    def conflict(
+    def weight_of_conflict(
         self,
         mass_function: "MassFunction[E] | Iterable[MassFunction[E]]",
         sample_count: int | None = None,

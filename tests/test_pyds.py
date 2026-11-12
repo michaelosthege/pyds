@@ -275,12 +275,14 @@ class PyDSTest(unittest.TestCase):
         self.assertAlmostEqual(0.2, m["bc"])
         self.assertAlmostEqual(0.08, m["abc"])
 
-    def test_conflict(self):
-        self.assertAlmostEqual(-log(0.55), self.m1.conflict(self.m2), 8)
+    def test_weight_of_conflict(self):
+        self.assertAlmostEqual(-log(0.55), self.m1.weight_of_conflict(self.m2), 8)
         self.assertAlmostEqual(
-            -log(0.55), self.m1.conflict(self.m2, sample_count=10000), 1
+            -log(0.55), self.m1.weight_of_conflict(self.m2, sample_count=10000), 1
         )
-        self.assertEqual(float("inf"), self.m1.conflict(MassFunction({"e": 1})))
+        self.assertEqual(
+            float("inf"), self.m1.weight_of_conflict(MassFunction({"e": 1}))
+        )
 
     def test_normalize(self):
         v = self.m1["a"]
@@ -399,10 +401,10 @@ class PyDSTest(unittest.TestCase):
             MassFunction.gbt(pl), MassFunction.gbt(pl, sample_count=10000), 1
         )
 
-    def test_frame(self):
-        self.assertEqual({"a", "b", "c", "d"}, self.m1.frame())
-        self.assertEqual({"a", "b", "c"}, self.m2.frame())
-        self.assertEqual(set(), MassFunction().frame())
+    def test_implicit_frame(self):
+        self.assertEqual({"a", "b", "c", "d"}, self.m1.implicit_frame())
+        self.assertEqual({"a", "b", "c"}, self.m2.implicit_frame())
+        self.assertEqual(set(), MassFunction().implicit_frame())
 
     def test_singletons(self):
         self.assertSetEqual(
@@ -534,7 +536,9 @@ class PyDSTest(unittest.TestCase):
     def test_from_array(self):
         self._assert_equal_belief(
             self.m1,
-            MassFunction.from_array(self.m1.to_array(self.m1.frame()), self.m1.frame()),
+            MassFunction.from_array(
+                self.m1.to_array(self.m1.implicit_frame()), self.m1.implicit_frame()
+            ),
         )
 
     def test_confidence_intervals(self):
