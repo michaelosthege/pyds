@@ -11,7 +11,7 @@ from operator import mul
 from random import random, shuffle, uniform
 from typing import Literal, TypeVar, overload
 
-from pyds.exceptions import NotProbabilisticError
+from pyds.exceptions import NotProbabilisticError, TotalConflictError
 
 try:
     import numpy
@@ -24,7 +24,9 @@ try:
 except ModuleNotFoundError:
     print("NumPy not found: some features will not work.", file=sys.stderr)
 
-LP_ZERO_TOLERANCE = 1e-12
+_MISSING = object()
+
+ZERO_TOLERANCE = 1e-12
 
 E = TypeVar("E")
 """Type of the elements of the frame of discernment `Θ`."""
@@ -276,6 +278,18 @@ class MassFunction(dict[frozenset[E], float]):
     def __delitem__(self, hypothesis):
         return dict.__delitem__(self, MassFunction._convert(hypothesis))
 
+    def pop(self, hypothesis, default=_MISSING):
+        """Remove `hypothesis` and return its mass, or `default` if absent.
+
+        Overrides :meth:`dict.pop`, which bypasses :meth:`_convert` and would
+        miss a stored key when given a non-frozenset hypothesis.
+        Raises `KeyError` if absent and no `default` is given, as :meth:`dict.pop` does.
+        """
+        key = self._convert(hypothesis)
+        if default is _MISSING:
+            return dict.pop(self, key)
+        return dict.pop(self, key, default)
+
     def implicit_frame(self) -> frozenset[E]:
         """Returns the union of all stored hypotheses as a `frozenset`, or an empty `frozenset` if there are none.
 
@@ -484,6 +498,19 @@ class MassFunction(dict[frozenset[E], float]):
         """Shorthand for 'combine_disjunctive(mass_function)'."""
         return self.combine_disjunctive(mass_function)
 
+    def __ior__(self, other):
+        """In-place disjunctive combination (shorthand for :meth:`combine_disjunctive`).
+
+        Overrides :meth:`dict.__ior__` (PEP 584, Python 3.9+), which resolves `|=`
+        to a dict merge instead of :meth:`__or__`.
+        """
+        if not isinstance(other, MassFunction):
+            return NotImplemented
+        result = self.combine_disjunctive(other)
+        self.clear()
+        self.update(result)
+        return self
+
     def __str__(self):
         hyp = sorted([(v, h) for (h, v) in self.items()], reverse=True)
         return "{" + "; ".join([str(set(h)) + ":" + str(v) for (v, h) in hyp]) + "}"
@@ -506,6 +533,29 @@ class MassFunction(dict[frozenset[E], float]):
         for h, v in m.items():
             result[h] += v
         return result
+
+    def update(self, other=(), /, **kw):
+        """Add or update mass values, routing every key through :meth:`__setitem__`.
+
+        Overrides :meth:`dict.update`, which bypasses `__setitem__`, and would store
+        unconverted keys and accept negative masses.
+        """
+        items = other.items() if isinstance(other, Mapping) else other
+        for hypothesis, mass in items:
+            self[hypothesis] = mass
+        for hypothesis, mass in kw.items():
+            self[hypothesis] = mass
+
+    def setdefault(self, hypothesis, default=0.0):
+        """Return the mass of `hypothesis`, inserting `default` if it is absent.
+
+        Overrides :meth:`dict.setdefault`, which bypasses :meth:`__setitem__` and
+        would insert an unconverted key without validating the mass value.
+        """
+        hypothesis = self._convert(hypothesis)
+        if not dict.__contains__(self, hypothesis):
+            self[hypothesis] = default
+        return self[hypothesis]
 
     def weight_function(self):
         """
@@ -763,14 +813,21 @@ class MassFunction(dict[frozenset[E], float]):
         Normalizes the mass function in-place.
 
         Sets the mass value of the empty set to 0 and scales all other values such that their sum equals 1.
-        For convenience, the method returns 'self'.
+        For convenience, the method returns `self`.
+
+        An empty mass function is returned unchanged.
+        Raises :class:`TotalConflictError` if all mass is on the empty set (K = 1).
+        On failure, `self` is left unmodified.
         """
-        if frozenset() in self:
-            del self[frozenset()]
-        mass_sum = fsum(self.values())
-        if mass_sum != 1.0:
-            for h, v in self.items():
-                self[h] = v / mass_sum
+        if not self:
+            return self
+        non_empty = fsum(mass for hypothesis, mass in self.items() if hypothesis)
+        if non_empty <= ZERO_TOLERANCE:
+            raise TotalConflictError("cannot normalize: all mass on the empty set")
+        self.pop(frozenset(), None)
+        if non_empty != 1.0:
+            for hypothesis, mass in list(self.items()):
+                self[hypothesis] = mass / non_empty
         return self
 
     def prune(self):
@@ -1337,7 +1394,7 @@ class MassFunction(dict[frozenset[E], float]):
                 raise ValueError(f"maxbel linear program failed: {result.message}")
 
             m_optimal = numpy.maximum(result.x, 0.0)
-            m_optimal[m_optimal < LP_ZERO_TOLERANCE] = 0.0
+            m_optimal[m_optimal < ZERO_TOLERANCE] = 0.0
 
             return MassFunction.from_array(m_optimal, H)
 

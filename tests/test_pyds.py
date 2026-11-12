@@ -8,6 +8,7 @@ from itertools import product
 from math import fsum, isnan, log, log2
 
 from pyds import MassFunction, gbt_bel, gbt_m, gbt_pignistic, gbt_pl, gbt_q, powerset
+from pyds.exceptions import TotalConflictError
 
 LP_FEASIBILITY_TOLERANCE = 1e-9
 
@@ -210,8 +211,9 @@ class PyDSTest(unittest.TestCase):
         m_single = self.m1.combine_conjunctive(self.m1).combine_conjunctive(self.m2)
         m_multi = self.m1.combine_conjunctive([self.m1, self.m2])
         self._assert_equal_belief(m_single, m_multi, 10)
-        # combine incompatible mass function
-        self.assertFalse(self.m1 & MassFunction({(0, 1): 0.8, (0,): 0.2}))
+        # combine incompatible mass function → K = 1, Dempster's rule is undefined
+        with self.assertRaises(TotalConflictError):
+            self.m1 & MassFunction({(0, 1): 0.8, (0,): 0.2})
 
     def test_combine_disjunctive(self):
         def test(m, places):
@@ -292,6 +294,12 @@ class PyDSTest(unittest.TestCase):
         self.assertAlmostEqual(0.1 / (1 - v), self.m1["ad"])
         self.assertAlmostEqual(0.3 / (1 - v), self.m1["abcd"])
         self.assertEqual(0, len(MassFunction().normalize()))
+
+    def test_normalize_total_conflict_leaves_operand_unmodified(self):
+        m = MassFunction.categorical(frozenset())
+        with self.assertRaises(TotalConflictError):
+            m.normalize()
+        self.assertEqual({frozenset(): 1.0}, dict(m))
 
     def test_multiple_dimensions(self):
         md1 = MassFunction({(("a", 1), ("b", 2)): 0.8, (("a", 1),): 0.2})
@@ -805,6 +813,39 @@ class PyDSTest(unittest.TestCase):
         self.assertEqual(0.4, m_sum[()])
         self.assertEqual(0.1, m_sum["a", "b"])
         self.assertEqual(0.0, m_sum["a"])
+
+    def test_ior_is_disjunctive(self):
+        m = MassFunction.categorical({"A"})
+        m |= MassFunction.categorical({"B"})
+        self.assertEqual({frozenset({"A", "B"}): 1.0}, dict(m))
+
+    def test_iand_is_conjunctive(self):
+        m = MassFunction({frozenset({"A", "B"}): 0.5, frozenset({"A"}): 0.5})
+        m &= MassFunction.categorical({"A"})
+        self.assertEqual({frozenset({"A"}): 1.0}, dict(m))
+
+    def test_update_converts_keys(self):
+        m = MassFunction()
+        m.update({("A", "B"): 0.5})
+        self.assertEqual({frozenset({"A", "B"}): 0.5}, dict(m))
+        self.assertEqual(0.5, m[{"A", "B"}])
+
+    def test_update_rejects_negative_mass(self):
+        with self.assertRaises(ValueError):
+            MassFunction().update({("A",): -0.1})
+
+    def test_setdefault_converts_keys(self):
+        m = MassFunction()
+        self.assertEqual(0.5, m.setdefault(("A",), 0.5))
+        self.assertEqual(0.5, m[{"A"}])
+        self.assertEqual(0.5, m.setdefault(("A",), 0.9))
+
+    def test_pop_converts_and_preserves_dict_contract(self):
+        m = MassFunction.categorical(frozenset())
+        self.assertEqual(1.0, m.pop((), 0.0))
+        self.assertEqual(0.0, m.pop((), 0.0))
+        with self.assertRaises(KeyError):
+            m.pop(())
 
 
 if __name__ == "__main__":
