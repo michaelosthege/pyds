@@ -3,7 +3,7 @@ A framework for performing computations in the Dempster-Shafer theory.
 """
 
 import sys
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from functools import reduce
 from itertools import chain, combinations
 from math import fsum, log, log2, sqrt
@@ -45,6 +45,7 @@ class MassFunction(dict[frozenset[E], float]):
         self,
         source: Iterable[tuple[Iterable[E], float]]
         | Mapping[Iterable[E], float]
+        | Mapping[frozenset[E], float]
         | None = None,
     ):
         """
@@ -65,6 +66,39 @@ class MassFunction(dict[frozenset[E], float]):
     def _convert(hypothesis: Iterable[E]) -> frozenset[E]:
         """Convert hypothesis to a 'frozenset' in order to make it hashable."""
         return frozenset(hypothesis)
+
+    @classmethod
+    def vacuous(cls, theta: Iterable[E]) -> "MassFunction[E]":
+        """Complete ignorance: m(`theta`) = 1."""
+        return cls([(theta, 1.0)])
+
+    @classmethod
+    def categorical(cls, hypothesis: Iterable[E]) -> "MassFunction[E]":
+        """Total certainty on `hypothesis`: m(A) = 1. :meth:`categorical(∅)` is total conflict."""
+        return cls([(hypothesis, 1.0)])
+
+    @classmethod
+    def simple_support(
+        cls, hypothesis: Iterable[E], degree: float, theta: Iterable[E]
+    ) -> "MassFunction[E]":
+        """Simple focused support function focused at `hypothesis`: m(`hypothesis`) = `degree`, m(`theta`) = 1 - `degree`.
+
+        `theta` must be given explicitly because a BPA alone does not distinguish a certain singleton belief, e.g. `m({P}) = 1.0`,
+        from ignorance over a singleton frame, e.g. `m(Θ) = 1.0` where `Θ = {P}`.
+        """
+        hypothesis = MassFunction._convert(hypothesis)
+        theta = MassFunction._convert(theta)
+        if not hypothesis <= theta:
+            raise ValueError(f"hypothesis {hypothesis} is not a subset of {theta}")
+        if not 0.0 <= degree <= 1.0:
+            raise ValueError(f"degree {degree} must be in [0, 1]")
+        # avoid a 0-mass focal
+        if degree == 0.0:
+            return cls.vacuous(theta)
+        # ignorance collapses to certainty
+        if degree == 1.0 or hypothesis == theta:
+            return cls.categorical(hypothesis)
+        return cls({hypothesis: degree, theta: 1.0 - degree})
 
     @staticmethod
     def _gbt_likelihoods(
@@ -266,6 +300,33 @@ class MassFunction(dict[frozenset[E], float]):
         """
         return {frozenset((s,)) for s in self.implicit_frame()}
 
+    def max_singleton(
+        self, min_mass: float = 0.0, *, candidates: Collection[E] | None = None
+    ) -> tuple[E, float] | None:
+        """Highest-mass singleton with mass ≥ `min_mass`, optionally restricted to `candidates`.
+
+        For singletons m({x}) == bel({x}), so this is also the maximum-belief singleton — deterministic, unlike `max_bel()`.
+        """
+        best: tuple[E, float] | None = None
+        for hypothesis, mass in self.items():
+            if len(hypothesis) != 1 or mass < min_mass:
+                continue
+            (element,) = hypothesis
+            if candidates is not None and element not in candidates:
+                continue
+            if best is None or mass > best[1]:
+                best = (element, mass)
+        return best
+
+    def singleton_masses(self) -> dict[E, float]:
+        """Mass on singleton focals only."""
+        out: dict[E, float] = {}
+        for focal, mass in self.items():
+            if len(focal) == 1:
+                (element,) = focal
+                out[element] = out.get(element, 0.0) + mass
+        return out
+
     def focal(self) -> set[frozenset[E]]:
         """
         Returns the set of all focal hypotheses.
@@ -273,6 +334,10 @@ class MassFunction(dict[frozenset[E], float]):
         A focal hypothesis has a mass value greater than 0.
         """
         return {h for (h, v) in self.items() if v > 0}
+
+    def dominant_focal(self) -> tuple[frozenset[E], float] | None:
+        """Focal with the largest mass (ties: insertion order). None if empty."""
+        return max(self.items(), key=lambda kv: kv[1]) if self else None
 
     def core(self, *mass_functions: "MassFunction[E]") -> frozenset[E]:
         """
@@ -296,6 +361,44 @@ class MassFunction(dict[frozenset[E], float]):
     def all(self):
         """Returns an iterator over all subsets of the implicit frame, including the empty set."""
         return powerset(self.implicit_frame())
+
+    def expand_frame(
+        self, expanded_theta: Iterable[E], *, current_theta: Iterable[E] | None = None
+    ) -> "MassFunction[E]":
+        """Expand to Θ' ⊇ Θ: mass on Θ moves to Θ', all other focals unchanged."""
+        old = (
+            self.implicit_frame()
+            if current_theta is None
+            else MassFunction._convert(current_theta)
+        )
+        if not self.implicit_frame() <= old:
+            raise ValueError("current_theta must contain all stored hypotheses")
+        new = MassFunction._convert(expanded_theta)
+        if not old <= new:
+            raise ValueError("frame expansion cannot shrink the frame")
+        if new == old:
+            return self.copy()
+        out: MassFunction[E] = MassFunction()
+        for focal, mass in self.items():
+            out[new if (focal and focal == old) else focal] += mass
+        return out
+
+    def restrict(self, hypothesis: Iterable[E]) -> "MassFunction[E]":
+        """Conditions on `hypothesis`, transferring conflicting mass to it instead of normalizing.
+
+        It is mass-preserving. Unlike Dempster conditioning (:meth:`condition`), conflict is not redistributed,
+        so beliefs are not inflated.
+
+        Doesn't yield conflict unless `hypothesis` is empty, in which case total conflict is returned.
+        """
+        hypothesis = MassFunction._convert(hypothesis)
+        if not hypothesis:
+            return MassFunction.categorical(frozenset())
+        out = self.condition(hypothesis, normalization=False)
+        conflicting_mass = out.pop(frozenset(), 0.0)
+        if conflicting_mass:
+            out[hypothesis] += conflicting_mass
+        return out
 
     @overload
     def bel(self, hypothesis: None = None) -> Mapping[frozenset[E], float]: ...
@@ -975,11 +1078,8 @@ class MassFunction(dict[frozenset[E], float]):
         if isinstance(d, MassFunction):
             return d
         else:
-            # src: dict[frozenset[E], float]
-            src = {frozenset((h,)): v for h, v in d.items()}
-            # MassFunction wants: Mapping[Iterable[E], float]
-            # which is compatible?! but we still get an error
-            return MassFunction(src)  # type: ignore
+            src: dict[frozenset[E], float] = {frozenset((h,)): v for h, v in d.items()}
+            return MassFunction(src)
 
     @staticmethod
     def from_possibility(poss):

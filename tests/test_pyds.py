@@ -401,16 +401,76 @@ class PyDSTest(unittest.TestCase):
             MassFunction.gbt(pl), MassFunction.gbt(pl, sample_count=10000), 1
         )
 
+    def test_vacuous_and_categorical(self):
+        theta = frozenset({"a", "b"})
+        self.assertEqual({theta: 1.0}, dict(MassFunction.vacuous(theta)))
+        self.assertEqual({frozenset({"a"}): 1.0}, dict(MassFunction.categorical({"a"})))
+        self.assertEqual(
+            {frozenset(): 1.0}, dict(MassFunction.categorical(frozenset()))
+        )
+
+    def test_simple_support(self):
+        theta = frozenset({"a", "b"})
+        a = frozenset({"a"})
+        m = MassFunction.simple_support(a, 0.9, theta)
+        self.assertEqual({a, theta}, set(m))
+        self.assertAlmostEqual(0.9, m[a])
+        self.assertAlmostEqual(0.1, m[theta])
+        self.assertAlmostEqual(1.0, fsum(m.values()))
+        # collapses must not leave 0-mass focals
+        self.assertEqual({theta: 1.0}, dict(MassFunction.simple_support(a, 0.0, theta)))
+        self.assertEqual({a: 1.0}, dict(MassFunction.simple_support(a, 1.0, theta)))
+        self.assertEqual(
+            {theta: 1.0}, dict(MassFunction.simple_support(theta, 0.5, theta))
+        )
+        with self.assertRaises(ValueError):
+            MassFunction.simple_support({"c"}, 0.5, theta)
+        with self.assertRaises(ValueError):
+            MassFunction.simple_support(a, 1.5, theta)
+
     def test_implicit_frame(self):
         self.assertEqual({"a", "b", "c", "d"}, self.m1.implicit_frame())
         self.assertEqual({"a", "b", "c"}, self.m2.implicit_frame())
         self.assertEqual(set(), MassFunction().implicit_frame())
+
+    def test_expand_frame(self):
+        old = frozenset({"a", "b"})
+        new = frozenset({"a", "b", "c"})
+        m = MassFunction({frozenset({"a"}): 0.4, old: 0.6})
+        self.assertEqual({frozenset({"a"}): 0.4, new: 0.6}, dict(m.expand_frame(new)))
+        self.assertIsNot(m, m.expand_frame(old))  # no-op returns a copy
+        with self.assertRaises(ValueError):
+            m.expand_frame(frozenset({"a"}))  # cannot shrink
+        # current_theta stops a certain singleton being mistaken for the top set
+        certain = MassFunction.categorical({"a"})
+        self.assertEqual({new: 1.0}, dict(certain.expand_frame(new)))
+        self.assertEqual(
+            {frozenset({"a"}): 1.0}, dict(certain.expand_frame(new, current_theta=old))
+        )
+
+    def test_restrict(self):
+        m = MassFunction({frozenset({"a"}): 0.6, frozenset({"b"}): 0.4})
+        out = m.restrict({"b", "c"})
+        # {a} conflicts → mass goes to the conditioning set, not normalized away
+        self.assertEqual({frozenset({"b"}): 0.4, frozenset({"b", "c"}): 0.6}, dict(out))
+        self.assertAlmostEqual(fsum(m.values()), fsum(out.values()))
+        self.assertEqual(dict(out), dict(out.restrict({"b", "c"})))  # idempotent
+        self.assertEqual({frozenset(): 1.0}, dict(m.restrict(frozenset())))
 
     def test_singletons(self):
         self.assertSetEqual(
             {frozenset("a"), frozenset("b"), frozenset("c"), frozenset("d")},
             self.m1.singletons(),
         )
+
+    def test_max_singleton(self):
+        m = MassFunction(
+            {frozenset({"a"}): 0.6, frozenset({"b"}): 0.3, frozenset({"a", "b"}): 0.1}
+        )
+        self.assertEqual(("a", 0.6), m.max_singleton())
+        self.assertIsNone(m.max_singleton(min_mass=0.9))
+        self.assertEqual(("b", 0.3), m.max_singleton(candidates={"b"}))
+        self.assertIsNone(MassFunction.vacuous({"a", "b"}).max_singleton())
 
     def test_focal(self):
         self.assertEqual(4, len(list(self.m1.focal())))
@@ -419,6 +479,14 @@ class PyDSTest(unittest.TestCase):
         self.m1[{"b"}] = 0
         self.assertEqual(3, len(self.m1.focal()))
         self.assertFalse({"b"} in self.m1.focal())
+
+    def test_singleton_masses_and_dominant_focal(self):
+        m = MassFunction(
+            {frozenset({"a"}): 0.6, frozenset({"b"}): 0.3, frozenset({"a", "b"}): 0.1}
+        )
+        self.assertEqual({"a": 0.6, "b": 0.3}, m.singleton_masses())
+        self.assertEqual((frozenset({"a"}), 0.6), m.dominant_focal())
+        self.assertIsNone(MassFunction().dominant_focal())
 
     def test_core(self):
         self.assertEqual({"a", "b", "c", "d"}, self.m1.core())
