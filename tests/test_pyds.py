@@ -8,6 +8,7 @@ from itertools import product
 from math import fsum, isnan, log, log2
 
 from pyds import MassFunction, gbt_bel, gbt_m, gbt_pignistic, gbt_pl, gbt_q, powerset
+from pyds.exceptions import TotalConflictError
 
 LP_FEASIBILITY_TOLERANCE = 1e-9
 
@@ -210,8 +211,9 @@ class PyDSTest(unittest.TestCase):
         m_single = self.m1.combine_conjunctive(self.m1).combine_conjunctive(self.m2)
         m_multi = self.m1.combine_conjunctive([self.m1, self.m2])
         self._assert_equal_belief(m_single, m_multi, 10)
-        # combine incompatible mass function
-        self.assertFalse(self.m1 & MassFunction({(0, 1): 0.8, (0,): 0.2}))
+        # combine incompatible mass function → K = 1, Dempster's rule is undefined
+        with self.assertRaises(TotalConflictError):
+            self.m1 & MassFunction({(0, 1): 0.8, (0,): 0.2})
 
     def test_combine_disjunctive(self):
         def test(m, places):
@@ -275,12 +277,14 @@ class PyDSTest(unittest.TestCase):
         self.assertAlmostEqual(0.2, m["bc"])
         self.assertAlmostEqual(0.08, m["abc"])
 
-    def test_conflict(self):
-        self.assertAlmostEqual(-log(0.55), self.m1.conflict(self.m2), 8)
+    def test_weight_of_conflict(self):
+        self.assertAlmostEqual(-log(0.55), self.m1.weight_of_conflict(self.m2), 8)
         self.assertAlmostEqual(
-            -log(0.55), self.m1.conflict(self.m2, sample_count=10000), 1
+            -log(0.55), self.m1.weight_of_conflict(self.m2, sample_count=10000), 1
         )
-        self.assertEqual(float("inf"), self.m1.conflict(MassFunction({"e": 1})))
+        self.assertEqual(
+            float("inf"), self.m1.weight_of_conflict(MassFunction({"e": 1}))
+        )
 
     def test_normalize(self):
         v = self.m1["a"]
@@ -290,6 +294,12 @@ class PyDSTest(unittest.TestCase):
         self.assertAlmostEqual(0.1 / (1 - v), self.m1["ad"])
         self.assertAlmostEqual(0.3 / (1 - v), self.m1["abcd"])
         self.assertEqual(0, len(MassFunction().normalize()))
+
+    def test_normalize_total_conflict_leaves_operand_unmodified(self):
+        m = MassFunction.categorical(frozenset())
+        with self.assertRaises(TotalConflictError):
+            m.normalize()
+        self.assertEqual({frozenset(): 1.0}, dict(m))
 
     def test_multiple_dimensions(self):
         md1 = MassFunction({(("a", 1), ("b", 2)): 0.8, (("a", 1),): 0.2})
@@ -399,16 +409,76 @@ class PyDSTest(unittest.TestCase):
             MassFunction.gbt(pl), MassFunction.gbt(pl, sample_count=10000), 1
         )
 
-    def test_frame(self):
-        self.assertEqual({"a", "b", "c", "d"}, self.m1.frame())
-        self.assertEqual({"a", "b", "c"}, self.m2.frame())
-        self.assertEqual(set(), MassFunction().frame())
+    def test_vacuous_and_categorical(self):
+        theta = frozenset({"a", "b"})
+        self.assertEqual({theta: 1.0}, dict(MassFunction.vacuous(theta)))
+        self.assertEqual({frozenset({"a"}): 1.0}, dict(MassFunction.categorical({"a"})))
+        self.assertEqual(
+            {frozenset(): 1.0}, dict(MassFunction.categorical(frozenset()))
+        )
+
+    def test_simple_support(self):
+        theta = frozenset({"a", "b"})
+        a = frozenset({"a"})
+        m = MassFunction.simple_support(a, 0.9, theta)
+        self.assertEqual({a, theta}, set(m))
+        self.assertAlmostEqual(0.9, m[a])
+        self.assertAlmostEqual(0.1, m[theta])
+        self.assertAlmostEqual(1.0, fsum(m.values()))
+        # collapses must not leave 0-mass focals
+        self.assertEqual({theta: 1.0}, dict(MassFunction.simple_support(a, 0.0, theta)))
+        self.assertEqual({a: 1.0}, dict(MassFunction.simple_support(a, 1.0, theta)))
+        self.assertEqual(
+            {theta: 1.0}, dict(MassFunction.simple_support(theta, 0.5, theta))
+        )
+        with self.assertRaises(ValueError):
+            MassFunction.simple_support({"c"}, 0.5, theta)
+        with self.assertRaises(ValueError):
+            MassFunction.simple_support(a, 1.5, theta)
+
+    def test_implicit_frame(self):
+        self.assertEqual({"a", "b", "c", "d"}, self.m1.implicit_frame())
+        self.assertEqual({"a", "b", "c"}, self.m2.implicit_frame())
+        self.assertEqual(set(), MassFunction().implicit_frame())
+
+    def test_expand_frame(self):
+        old = frozenset({"a", "b"})
+        new = frozenset({"a", "b", "c"})
+        m = MassFunction({frozenset({"a"}): 0.4, old: 0.6})
+        self.assertEqual({frozenset({"a"}): 0.4, new: 0.6}, dict(m.expand_frame(new)))
+        self.assertIsNot(m, m.expand_frame(old))  # no-op returns a copy
+        with self.assertRaises(ValueError):
+            m.expand_frame(frozenset({"a"}))  # cannot shrink
+        # current_theta stops a certain singleton being mistaken for the top set
+        certain = MassFunction.categorical({"a"})
+        self.assertEqual({new: 1.0}, dict(certain.expand_frame(new)))
+        self.assertEqual(
+            {frozenset({"a"}): 1.0}, dict(certain.expand_frame(new, current_theta=old))
+        )
+
+    def test_restrict(self):
+        m = MassFunction({frozenset({"a"}): 0.6, frozenset({"b"}): 0.4})
+        out = m.restrict({"b", "c"})
+        # {a} conflicts → mass goes to the conditioning set, not normalized away
+        self.assertEqual({frozenset({"b"}): 0.4, frozenset({"b", "c"}): 0.6}, dict(out))
+        self.assertAlmostEqual(fsum(m.values()), fsum(out.values()))
+        self.assertEqual(dict(out), dict(out.restrict({"b", "c"})))  # idempotent
+        self.assertEqual({frozenset(): 1.0}, dict(m.restrict(frozenset())))
 
     def test_singletons(self):
         self.assertSetEqual(
             {frozenset("a"), frozenset("b"), frozenset("c"), frozenset("d")},
             self.m1.singletons(),
         )
+
+    def test_max_singleton(self):
+        m = MassFunction(
+            {frozenset({"a"}): 0.6, frozenset({"b"}): 0.3, frozenset({"a", "b"}): 0.1}
+        )
+        self.assertEqual(("a", 0.6), m.max_singleton())
+        self.assertIsNone(m.max_singleton(min_mass=0.9))
+        self.assertEqual(("b", 0.3), m.max_singleton(candidates={"b"}))
+        self.assertIsNone(MassFunction.vacuous({"a", "b"}).max_singleton())
 
     def test_focal(self):
         self.assertEqual(4, len(list(self.m1.focal())))
@@ -417,6 +487,14 @@ class PyDSTest(unittest.TestCase):
         self.m1[{"b"}] = 0
         self.assertEqual(3, len(self.m1.focal()))
         self.assertFalse({"b"} in self.m1.focal())
+
+    def test_singleton_masses_and_dominant_focal(self):
+        m = MassFunction(
+            {frozenset({"a"}): 0.6, frozenset({"b"}): 0.3, frozenset({"a", "b"}): 0.1}
+        )
+        self.assertEqual({"a": 0.6, "b": 0.3}, m.singleton_masses())
+        self.assertEqual((frozenset({"a"}), 0.6), m.dominant_focal())
+        self.assertIsNone(MassFunction().dominant_focal())
 
     def test_core(self):
         self.assertEqual({"a", "b", "c", "d"}, self.m1.core())
@@ -534,7 +612,9 @@ class PyDSTest(unittest.TestCase):
     def test_from_array(self):
         self._assert_equal_belief(
             self.m1,
-            MassFunction.from_array(self.m1.to_array(self.m1.frame()), self.m1.frame()),
+            MassFunction.from_array(
+                self.m1.to_array(self.m1.implicit_frame()), self.m1.implicit_frame()
+            ),
         )
 
     def test_confidence_intervals(self):
@@ -733,6 +813,39 @@ class PyDSTest(unittest.TestCase):
         self.assertEqual(0.4, m_sum[()])
         self.assertEqual(0.1, m_sum["a", "b"])
         self.assertEqual(0.0, m_sum["a"])
+
+    def test_ior_is_disjunctive(self):
+        m = MassFunction.categorical({"A"})
+        m |= MassFunction.categorical({"B"})
+        self.assertEqual({frozenset({"A", "B"}): 1.0}, dict(m))
+
+    def test_iand_is_conjunctive(self):
+        m = MassFunction({frozenset({"A", "B"}): 0.5, frozenset({"A"}): 0.5})
+        m &= MassFunction.categorical({"A"})
+        self.assertEqual({frozenset({"A"}): 1.0}, dict(m))
+
+    def test_update_converts_keys(self):
+        m = MassFunction()
+        m.update({("A", "B"): 0.5})
+        self.assertEqual({frozenset({"A", "B"}): 0.5}, dict(m))
+        self.assertEqual(0.5, m[{"A", "B"}])
+
+    def test_update_rejects_negative_mass(self):
+        with self.assertRaises(ValueError):
+            MassFunction().update({("A",): -0.1})
+
+    def test_setdefault_converts_keys(self):
+        m = MassFunction()
+        self.assertEqual(0.5, m.setdefault(("A",), 0.5))
+        self.assertEqual(0.5, m[{"A"}])
+        self.assertEqual(0.5, m.setdefault(("A",), 0.9))
+
+    def test_pop_converts_and_preserves_dict_contract(self):
+        m = MassFunction.categorical(frozenset())
+        self.assertEqual(1.0, m.pop((), 0.0))
+        self.assertEqual(0.0, m.pop((), 0.0))
+        with self.assertRaises(KeyError):
+            m.pop(())
 
 
 if __name__ == "__main__":

@@ -3,13 +3,15 @@ A framework for performing computations in the Dempster-Shafer theory.
 """
 
 import sys
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from functools import reduce
 from itertools import chain, combinations
 from math import fsum, log, log2, sqrt
 from operator import mul
 from random import random, shuffle, uniform
 from typing import Literal, TypeVar, overload
+
+from pyds.exceptions import NotProbabilisticError, TotalConflictError
 
 try:
     import numpy
@@ -22,18 +24,15 @@ try:
 except ModuleNotFoundError:
     print("NumPy not found: some features will not work.", file=sys.stderr)
 
-LP_ZERO_TOLERANCE = 1e-12
+_MISSING = object()
+
+ZERO_TOLERANCE = 1e-12
+
+E = TypeVar("E")
+"""Type of the elements of the frame of discernment `Θ`."""
 
 
-class NotProbabilisticError(Exception):
-    """Indicates that a mass function is missspecified."""
-
-
-K = TypeVar("K")
-"""Keys of single hypotheses."""
-
-
-class MassFunction(dict[frozenset[K], float]):
+class MassFunction(dict[frozenset[E], float]):
     """
     A Dempster-Shafer mass function (basic probability assignment) based on a dictionary.
 
@@ -46,8 +45,9 @@ class MassFunction(dict[frozenset[K], float]):
 
     def __init__(
         self,
-        source: Iterable[tuple[Iterable[K], float]]
-        | Mapping[Iterable[K], float]
+        source: Iterable[tuple[Iterable[E], float]]
+        | Mapping[Iterable[E], float]
+        | Mapping[frozenset[E], float]
         | None = None,
     ):
         """
@@ -65,14 +65,47 @@ class MassFunction(dict[frozenset[K], float]):
                 self[frozenset(h)] += v
 
     @staticmethod
-    def _convert(hypothesis: Iterable[K]) -> frozenset[K]:
+    def _convert(hypothesis: Iterable[E]) -> frozenset[E]:
         """Convert hypothesis to a 'frozenset' in order to make it hashable."""
         return frozenset(hypothesis)
 
+    @classmethod
+    def vacuous(cls, theta: Iterable[E]) -> "MassFunction[E]":
+        """Complete ignorance: m(`theta`) = 1."""
+        return cls([(theta, 1.0)])
+
+    @classmethod
+    def categorical(cls, hypothesis: Iterable[E]) -> "MassFunction[E]":
+        """Total certainty on `hypothesis`: m(A) = 1. :meth:`categorical(∅)` is total conflict."""
+        return cls([(hypothesis, 1.0)])
+
+    @classmethod
+    def simple_support(
+        cls, hypothesis: Iterable[E], degree: float, theta: Iterable[E]
+    ) -> "MassFunction[E]":
+        """Simple focused support function focused at `hypothesis`: m(`hypothesis`) = `degree`, m(`theta`) = 1 - `degree`.
+
+        `theta` must be given explicitly because a BPA alone does not distinguish a certain singleton belief, e.g. `m({P}) = 1.0`,
+        from ignorance over a singleton frame, e.g. `m(Θ) = 1.0` where `Θ = {P}`.
+        """
+        hypothesis = MassFunction._convert(hypothesis)
+        theta = MassFunction._convert(theta)
+        if not hypothesis <= theta:
+            raise ValueError(f"hypothesis {hypothesis} is not a subset of {theta}")
+        if not 0.0 <= degree <= 1.0:
+            raise ValueError(f"degree {degree} must be in [0, 1]")
+        # avoid a 0-mass focal
+        if degree == 0.0:
+            return cls.vacuous(theta)
+        # ignorance collapses to certainty
+        if degree == 1.0 or hypothesis == theta:
+            return cls.categorical(hypothesis)
+        return cls({hypothesis: degree, theta: 1.0 - degree})
+
     @staticmethod
     def _gbt_likelihoods(
-        likelihoods: Mapping[K, float] | Iterable[tuple[K, float]],
-    ) -> list[tuple[K, float]]:
+        likelihoods: Mapping[E, float] | Iterable[tuple[E, float]],
+    ) -> list[tuple[E, float]]:
         """Normalize input into a list of `(hypothesis, likelihood)` pairs."""
         if isinstance(likelihoods, Mapping):
             return list(likelihoods.items())
@@ -80,10 +113,10 @@ class MassFunction(dict[frozenset[K], float]):
 
     @staticmethod
     def gbt(
-        likelihoods: Mapping[K, float] | Iterable[tuple[K, float]],
+        likelihoods: Mapping[E, float] | Iterable[tuple[E, float]],
         normalization: bool = True,
         sample_count: int | None = None,
-    ) -> "MassFunction[K]":
+    ) -> "MassFunction[E]":
         """
         Constructs a mass function using the generalized Bayesian theorem.
         For more information, see Smets. 1993. Belief functions:
@@ -97,20 +130,20 @@ class MassFunction(dict[frozenset[K], float]):
 
         If 'sample_count' is not None, the true mass function is approximated using the specified number of samples.
         """
-        m = MassFunction[K]()
+        m: MassFunction[E] = MassFunction()
         likelihoods = MassFunction._gbt_likelihoods(likelihoods)
 
         # filter trivial likelihoods 0 and 1
-        ones: list[K] = [h for (h, l) in likelihoods if l >= 1.0]
+        ones: list[E] = [h for (h, l) in likelihoods if l >= 1.0]
         likelihoods = [(h, l) for (h, l) in likelihoods if 0.0 < l < 1.0]
         if sample_count is None:  # deterministic
 
             def traverse(
-                m: "MassFunction[K]",
-                likelihoods: list[tuple[K, float]],
-                ones: list[K],
+                m: "MassFunction[E]",
+                likelihoods: list[tuple[E, float]],
+                ones: list[E],
                 index: int,
-                hyp: list[K],
+                hyp: list[E],
                 mass: float,
             ) -> None:
                 if index == len(likelihoods):
@@ -142,7 +175,7 @@ class MassFunction(dict[frozenset[K], float]):
             for _ in range(sample_count):
                 rv = [random() for _ in range(len(likelihoods))]
                 subtree_mass = 1.0
-                hyp: set[K] = set(ones)
+                hyp: set[E] = set(ones)
                 for k in range(len(likelihoods)):
                     l = likelihoods[k][1]
                     p_t = l * subtree_mass
@@ -161,13 +194,13 @@ class MassFunction(dict[frozenset[K], float]):
         return m
 
     @staticmethod
-    def from_bel(bel: Mapping[frozenset[K], float]) -> "MassFunction[K]":
+    def from_bel(bel: Mapping[frozenset[E], float]) -> "MassFunction[E]":
         """
         Creates a mass function from a corresponding belief function.
 
         'bel' is a dictionary mapping hypotheses to belief values (like the dictionary returned by 'bel(None)').
         """
-        m = MassFunction[K]()
+        m: MassFunction[E] = MassFunction()
         for h1 in bel:
             v = fsum([bel[h2] * (-1) ** (len(h1 - h2)) for h2 in powerset(h1)])
             if v > 0:
@@ -178,7 +211,7 @@ class MassFunction(dict[frozenset[K], float]):
         return m
 
     @staticmethod
-    def from_pl(pl: Mapping[frozenset[K], float]) -> "MassFunction[K]":
+    def from_pl(pl: Mapping[frozenset[E], float]) -> "MassFunction[E]":
         """
         Creates a mass function from a corresponding plausibility function.
 
@@ -192,13 +225,13 @@ class MassFunction(dict[frozenset[K], float]):
         return MassFunction.from_bel(bel)
 
     @staticmethod
-    def from_q(q: Mapping[frozenset[K], float]) -> "MassFunction[K]":
+    def from_q(q: Mapping[frozenset[E], float]) -> "MassFunction[E]":
         """
         Creates a mass function from a corresponding commonality function.
 
         'q' is a dictionary mapping hypotheses to commonality values (like the dictionary returned by 'q(None)').
         """
-        m = MassFunction[K]()
+        m: MassFunction[E] = MassFunction()
         frame = max(q.keys(), key=len)
         for h1 in q:
             v = fsum(
@@ -231,7 +264,7 @@ class MassFunction(dict[frozenset[K], float]):
     def __getitem__(self, hypothesis):
         return dict.__getitem__(self, MassFunction._convert(hypothesis))
 
-    def __setitem__(self, hypothesis: Iterable[K], value: float):
+    def __setitem__(self, hypothesis: Iterable[E], value: float):
         """
         Adds or updates the mass value of a hypothesis.
 
@@ -245,28 +278,70 @@ class MassFunction(dict[frozenset[K], float]):
     def __delitem__(self, hypothesis):
         return dict.__delitem__(self, MassFunction._convert(hypothesis))
 
-    def frame(self) -> frozenset[K]:
-        """
-        Returns the frame of discernment of the mass function as a 'frozenset'.
+    def pop(self, hypothesis, default=_MISSING):
+        """Remove `hypothesis` and return its mass, or `default` if absent.
 
-        The frame of discernment is the union of all contained hypotheses.
-        In case the mass function does not contain any hypotheses, an empty set is returned.
+        Overrides :meth:`dict.pop`, which bypasses :meth:`_convert` and would
+        miss a stored key when given a non-frozenset hypothesis.
+        Raises `KeyError` if absent and no `default` is given, as :meth:`dict.pop` does.
+        """
+        key = self._convert(hypothesis)
+        if default is _MISSING:
+            return dict.pop(self, key)
+        return dict.pop(self, key, default)
+
+    def implicit_frame(self) -> frozenset[E]:
+        """Returns the union of all stored hypotheses as a `frozenset`, or an empty `frozenset` if there are none.
+
+        This is a lower bound on Θ, not Θ itself: a mass function does not store its frame of discernment, so m({x}) = 1
+        over Θ = {x, y, z} yields {x}. Unlike :meth:`core`, hypotheses with zero mass contribute their elements too.
+
+        The union is non-increasing under :meth:`combine_conjunctive`, since focal sets are intersected. That correctly describes
+        the resulting belief, but makes this method unsuitable as a source of Θ for operations that place mass on the top set:
+        pass Θ explicitly to :meth:`simple_support` and :meth:`expand_frame`.
         """
         if not self:
             return frozenset()
         else:
             return frozenset.union(*self.keys())
 
-    def singletons(self) -> set[frozenset[K]]:
+    def singletons(self) -> set[frozenset[E]]:
         """
         Returns the set of all singleton hypotheses.
 
-        Like 'frame()', except that each singleton is wrapped in a frozenset
-        and can thus be directly passed to methods like 'bel()'.
+        Like :meth:`implicit_frame`, except that each singleton is wrapped in a `frozenset`
+        and can thus be directly passed to methods like :meth:`bel`.
         """
-        return {frozenset((s,)) for s in self.frame()}
+        return {frozenset((s,)) for s in self.implicit_frame()}
 
-    def focal(self) -> set[frozenset[K]]:
+    def max_singleton(
+        self, min_mass: float = 0.0, *, candidates: Collection[E] | None = None
+    ) -> tuple[E, float] | None:
+        """Highest-mass singleton with mass ≥ `min_mass`, optionally restricted to `candidates`.
+
+        For singletons m({x}) == bel({x}), so this is also the maximum-belief singleton — deterministic, unlike `max_bel()`.
+        """
+        best: tuple[E, float] | None = None
+        for hypothesis, mass in self.items():
+            if len(hypothesis) != 1 or mass < min_mass:
+                continue
+            (element,) = hypothesis
+            if candidates is not None and element not in candidates:
+                continue
+            if best is None or mass > best[1]:
+                best = (element, mass)
+        return best
+
+    def singleton_masses(self) -> dict[E, float]:
+        """Mass on singleton focals only."""
+        out: dict[E, float] = {}
+        for focal, mass in self.items():
+            if len(focal) == 1:
+                (element,) = focal
+                out[element] = out.get(element, 0.0) + mass
+        return out
+
+    def focal(self) -> set[frozenset[E]]:
         """
         Returns the set of all focal hypotheses.
 
@@ -274,7 +349,11 @@ class MassFunction(dict[frozenset[K], float]):
         """
         return {h for (h, v) in self.items() if v > 0}
 
-    def core(self, *mass_functions: "MassFunction[K]") -> frozenset[K]:
+    def dominant_focal(self) -> tuple[frozenset[E], float] | None:
+        """Focal with the largest mass (ties: insertion order). None if empty."""
+        return max(self.items(), key=lambda kv: kv[1]) if self else None
+
+    def core(self, *mass_functions: "MassFunction[E]") -> frozenset[E]:
         """
         Returns the core of one or more mass functions as a 'frozenset'.
 
@@ -294,18 +373,56 @@ class MassFunction(dict[frozenset[K], float]):
                 return frozenset.union(*focal)
 
     def all(self):
-        """Returns an iterator over all subsets of the frame of discernment, including the empty set."""
-        return powerset(self.frame())
+        """Returns an iterator over all subsets of the implicit frame, including the empty set."""
+        return powerset(self.implicit_frame())
+
+    def expand_frame(
+        self, expanded_theta: Iterable[E], *, current_theta: Iterable[E] | None = None
+    ) -> "MassFunction[E]":
+        """Expand to Θ' ⊇ Θ: mass on Θ moves to Θ', all other focals unchanged."""
+        old = (
+            self.implicit_frame()
+            if current_theta is None
+            else MassFunction._convert(current_theta)
+        )
+        if not self.implicit_frame() <= old:
+            raise ValueError("current_theta must contain all stored hypotheses")
+        new = MassFunction._convert(expanded_theta)
+        if not old <= new:
+            raise ValueError("frame expansion cannot shrink the frame")
+        if new == old:
+            return self.copy()
+        out: MassFunction[E] = MassFunction()
+        for focal, mass in self.items():
+            out[new if (focal and focal == old) else focal] += mass
+        return out
+
+    def restrict(self, hypothesis: Iterable[E]) -> "MassFunction[E]":
+        """Conditions on `hypothesis`, transferring conflicting mass to it instead of normalizing.
+
+        It is mass-preserving. Unlike Dempster conditioning (:meth:`condition`), conflict is not redistributed,
+        so beliefs are not inflated.
+
+        Doesn't yield conflict unless `hypothesis` is empty, in which case total conflict is returned.
+        """
+        hypothesis = MassFunction._convert(hypothesis)
+        if not hypothesis:
+            return MassFunction.categorical(frozenset())
+        out = self.condition(hypothesis, normalization=False)
+        conflicting_mass = out.pop(frozenset(), 0.0)
+        if conflicting_mass:
+            out[hypothesis] += conflicting_mass
+        return out
 
     @overload
-    def bel(self, hypothesis: None = None) -> Mapping[frozenset[K], float]: ...
+    def bel(self, hypothesis: None = None) -> Mapping[frozenset[E], float]: ...
 
     @overload
-    def bel(self, hypothesis: Iterable[K]) -> float: ...
+    def bel(self, hypothesis: Iterable[E]) -> float: ...
 
     def bel(
-        self, hypothesis: Iterable[K] | None = None
-    ) -> Mapping[frozenset[K], float] | float:
+        self, hypothesis: Iterable[E] | None = None
+    ) -> Mapping[frozenset[E], float] | float:
         """
         Computes either the belief of 'hypothesis' or the entire belief function (hypothesis=None).
 
@@ -325,14 +442,14 @@ class MassFunction(dict[frozenset[K], float]):
                 )
 
     @overload
-    def pl(self, hypothesis: None = None) -> Mapping[frozenset[K], float]: ...
+    def pl(self, hypothesis: None = None) -> Mapping[frozenset[E], float]: ...
 
     @overload
-    def pl(self, hypothesis: Iterable[K]) -> float: ...
+    def pl(self, hypothesis: Iterable[E]) -> float: ...
 
     def pl(
-        self, hypothesis: Iterable[K] | None = None
-    ) -> Mapping[frozenset[K], float] | float:
+        self, hypothesis: Iterable[E] | None = None
+    ) -> Mapping[frozenset[E], float] | float:
         """
         Computes either the plausibility of 'hypothesis' or the entire plausibility function (hypothesis=None).
 
@@ -350,14 +467,14 @@ class MassFunction(dict[frozenset[K], float]):
                 return fsum([v for (h, v) in self.items() if hypothesis & h])
 
     @overload
-    def q(self, hypothesis: None) -> dict[frozenset[K], float]: ...
+    def q(self, hypothesis: None) -> dict[frozenset[E], float]: ...
 
     @overload
-    def q(self, hypothesis: Iterable[K]) -> float: ...
+    def q(self, hypothesis: Iterable[E]) -> float: ...
 
     def q(
-        self, hypothesis: Iterable[K] | None = None
-    ) -> float | dict[frozenset[K], float]:
+        self, hypothesis: Iterable[E] | None = None
+    ) -> float | dict[frozenset[E], float]:
         """
         Computes either the commonality of 'hypothesis' or the entire commonality function (hypothesis=None).
 
@@ -380,6 +497,19 @@ class MassFunction(dict[frozenset[K], float]):
     def __or__(self, mass_function):
         """Shorthand for 'combine_disjunctive(mass_function)'."""
         return self.combine_disjunctive(mass_function)
+
+    def __ior__(self, other):
+        """In-place disjunctive combination (shorthand for :meth:`combine_disjunctive`).
+
+        Overrides :meth:`dict.__ior__` (PEP 584, Python 3.9+), which resolves `|=`
+        to a dict merge instead of :meth:`__or__`.
+        """
+        if not isinstance(other, MassFunction):
+            return NotImplemented
+        result = self.combine_disjunctive(other)
+        self.clear()
+        self.update(result)
+        return self
 
     def __str__(self):
         hyp = sorted([(v, h) for (h, v) in self.items()], reverse=True)
@@ -404,12 +534,35 @@ class MassFunction(dict[frozenset[K], float]):
             result[h] += v
         return result
 
+    def update(self, other=(), /, **kw):
+        """Add or update mass values, routing every key through :meth:`__setitem__`.
+
+        Overrides :meth:`dict.update`, which bypasses `__setitem__`, and would store
+        unconverted keys and accept negative masses.
+        """
+        items = other.items() if isinstance(other, Mapping) else other
+        for hypothesis, mass in items:
+            self[hypothesis] = mass
+        for hypothesis, mass in kw.items():
+            self[hypothesis] = mass
+
+    def setdefault(self, hypothesis, default=0.0):
+        """Return the mass of `hypothesis`, inserting `default` if it is absent.
+
+        Overrides :meth:`dict.setdefault`, which bypasses :meth:`__setitem__` and
+        would insert an unconverted key without validating the mass value.
+        """
+        hypothesis = self._convert(hypothesis)
+        if not dict.__contains__(self, hypothesis):
+            self[hypothesis] = default
+        return self[hypothesis]
+
     def weight_function(self):
         """
         Computes the weight function corresponding to this mass function.
         """
         weights = {}
-        theta = self.frame()
+        theta = self.implicit_frame()
         for h in powerset(theta):
             if len(h) < len(theta):  # weight is undefined for theta
                 sets = [h | c for c in powerset(theta - h)]
@@ -486,7 +639,7 @@ class MassFunction(dict[frozenset[K], float]):
         w1 = self.weight_function()
         w2 = mass_function.weight_function()
         w_min = {h: min(w1[h], w2[h]) for h in w1}
-        theta = self.frame()
+        theta = self.implicit_frame()
         m = MassFunction({theta: 1.0})
         for h, w in w_min.items():
             # Clamp to 0.0 to handle floating point imprecision where w is marginally > 1.0
@@ -520,7 +673,7 @@ class MassFunction(dict[frozenset[K], float]):
 
     def _combine_deterministic(self, mass_function, rule):
         """Helper method for deterministically combining two mass functions."""
-        combined = MassFunction()
+        combined: MassFunction[E] = MassFunction()
         for h1, v1 in self.items():
             for h2, v2 in mass_function.items():
                 combined[rule(h1, h2)] += v1 * v2
@@ -528,7 +681,7 @@ class MassFunction(dict[frozenset[K], float]):
 
     def _combine_direct_sampling(self, mass_function, rule, sample_count):
         """Helper method for approximatively combining two mass functions using direct sampling."""
-        combined = MassFunction()
+        combined: MassFunction[E] = MassFunction()
         samples1 = self.sample(sample_count)
         samples2 = mass_function.sample(sample_count)
         for i in range(sample_count):
@@ -537,7 +690,7 @@ class MassFunction(dict[frozenset[K], float]):
 
     def _combine_importance_sampling(self, mass_function, sample_count):
         """Helper method for approximatively combining two mass functions using importance sampling."""
-        combined = MassFunction()
+        combined: MassFunction[E] = MassFunction()
         for s1, n in self.sample(sample_count, as_dict=True).items():
             weight = mass_function.pl(s1)
             for s2 in mass_function.condition(s1).sample(n):
@@ -546,11 +699,11 @@ class MassFunction(dict[frozenset[K], float]):
 
     def combine_gbt(
         self,
-        likelihoods: Mapping[K, float] | Iterable[tuple[K, float]],
+        likelihoods: Mapping[E, float] | Iterable[tuple[E, float]],
         normalization: bool = True,
         sample_count: int | None = None,
         importance_sampling=True,
-    ) -> "MassFunction[K]":
+    ) -> "MassFunction[E]":
         """
         Conjunctively combines the mass function with a mass function obtained from a sequence of
         likelihoods via the generalized Bayesian theorem and returns the combination as a new mass function.
@@ -580,7 +733,7 @@ class MassFunction(dict[frozenset[K], float]):
                 not normalization
             ):  # only use importance sampling in case of normalization
                 importance_sampling = False
-            combined = MassFunction[K]()
+            combined: MassFunction[E] = MassFunction()
             for s, n in self.sample(sample_count, as_dict=True).items():
                 if importance_sampling:
                     compatible_likelihoods = [l for l in likelihoods if l[0] in s]
@@ -598,7 +751,7 @@ class MassFunction(dict[frozenset[K], float]):
                 for _ in range(n):
                     rv = [random() for _ in range(len(compatible_likelihoods))]
                     subtree_mass = 1.0
-                    hyp: set[K] = set()
+                    hyp: set[E] = set()
                     for k in range(len(compatible_likelihoods)):
                         h, l = compatible_likelihoods[k]
                         norm = (
@@ -630,9 +783,9 @@ class MassFunction(dict[frozenset[K], float]):
         m = MassFunction({MassFunction._convert(hypothesis): 1.0})
         return self.combine_conjunctive(m, normalization=normalization)
 
-    def conflict(
+    def weight_of_conflict(
         self,
-        mass_function: "MassFunction[K] | Iterable[MassFunction[K]]",
+        mass_function: "MassFunction[E] | Iterable[MassFunction[E]]",
         sample_count: int | None = None,
     ) -> float:
         """
@@ -660,14 +813,21 @@ class MassFunction(dict[frozenset[K], float]):
         Normalizes the mass function in-place.
 
         Sets the mass value of the empty set to 0 and scales all other values such that their sum equals 1.
-        For convenience, the method returns 'self'.
+        For convenience, the method returns `self`.
+
+        An empty mass function is returned unchanged.
+        Raises :class:`TotalConflictError` if all mass is on the empty set (K = 1).
+        On failure, `self` is left unmodified.
         """
-        if frozenset() in self:
-            del self[frozenset()]
-        mass_sum = fsum(self.values())
-        if mass_sum != 1.0:
-            for h, v in self.items():
-                self[h] = v / mass_sum
+        if not self:
+            return self
+        non_empty = fsum(mass for hypothesis, mass in self.items() if hypothesis)
+        if non_empty <= ZERO_TOLERANCE:
+            raise TotalConflictError("cannot normalize: all mass on the empty set")
+        self.pop(frozenset(), None)
+        if non_empty != 1.0:
+            for hypothesis, mass in list(self.items()):
+                self[hypothesis] = mass / non_empty
         return self
 
     def prune(self):
@@ -683,17 +843,17 @@ class MassFunction(dict[frozenset[K], float]):
 
     def markov_deterministic(
         self,
-        transition_model: "Callable[[K], MassFunction[K]]",
+        transition_model: "Callable[[E], MassFunction[E]]",
     ):
-        updated = MassFunction[K]()
+        updated: MassFunction[E] = MassFunction()
         for k, v in self.items():
-            predicted: MassFunction[K] | None = None
+            predicted: MassFunction[E] | None = None
             for e in k:
                 if predicted is None:
                     predicted = transition_model(e)
                 else:
                     predicted = predicted.combine_disjunctive(transition_model(e))
-            kp: frozenset[K]
+            kp: frozenset[E]
             vp: float
             for kp, vp in (predicted or {}).items():
                 updated[kp] += v * vp
@@ -701,13 +861,13 @@ class MassFunction(dict[frozenset[K], float]):
 
     def markov_monto_carlo(
         self,
-        transition_model: "Callable[[K, int], MassFunction[K]]",
+        transition_model: "Callable[[E, int], MassFunction[E]]",
         sample_count: int,
     ):
-        updated = MassFunction[K]()
-        s: frozenset[K]
+        updated: MassFunction[E] = MassFunction()
+        s: frozenset[E]
         for s, n in self.sample(sample_count, as_dict=True).items():
-            unions: list[list[K]] = [[] for _ in range(n)]
+            unions: list[list[E]] = [[] for _ in range(n)]
             for e in s:
                 ts = transition_model(e, n)
                 for i, t in enumerate(ts):
@@ -718,7 +878,7 @@ class MassFunction(dict[frozenset[K], float]):
 
     def markov(
         self,
-        transition_model: "Callable[[K], MassFunction[K]] | Callable[[K, int], MassFunction[K]]",
+        transition_model: "Callable[[E], MassFunction[E]] | Callable[[E, int], MassFunction[E]]",
         sample_count: int | None = None,
     ):
         """
@@ -835,7 +995,7 @@ class MassFunction(dict[frozenset[K], float]):
         n: int,
         quantization: bool = ...,
         as_dict: Literal[False] = False,
-    ) -> list[frozenset[K]]: ...
+    ) -> list[frozenset[E]]: ...
 
     @overload
     def sample(
@@ -843,11 +1003,11 @@ class MassFunction(dict[frozenset[K], float]):
         n: int,
         quantization: bool = ...,
         as_dict: Literal[True] = True,
-    ) -> dict[frozenset[K], int]: ...
+    ) -> dict[frozenset[E], int]: ...
 
     def sample(
         self, n: int, quantization: bool = True, as_dict: bool = False
-    ) -> list[frozenset[K]] | dict[frozenset[K], int]:
+    ) -> list[frozenset[E]] | dict[frozenset[E], int]:
         """
         Returns n random samples from the mass distribution.
 
@@ -917,14 +1077,14 @@ class MassFunction(dict[frozenset[K], float]):
         """
         return all(len(h) == 1 for h in self.keys())
 
-    def sample_probability_distributions(self, n: int) -> list["MassFunction[K]"]:
+    def sample_probability_distributions(self, n: int) -> list["MassFunction[E]"]:
         """
         Randomly generates n compatible probability distributions from the mass function.
 
         The result is a list of n independently sampled probability distributions expressed as mass functions.
         This can be useful for estimating various statistical measures like the minimum or maximum entropy consistent with the mass distribution.
         """
-        samples = [MassFunction[K]() for _ in range(n)]
+        samples: list[MassFunction[E]] = [MassFunction() for _ in range(n)]
         for i in range(n):
             for h, v in self.items():
                 if len(h) == 1:
@@ -936,7 +1096,7 @@ class MassFunction(dict[frozenset[K], float]):
                         samples[i][{s}] += rv[k] * v / total
         return samples
 
-    def max_bel(self) -> frozenset[K] | None:
+    def max_bel(self) -> frozenset[E] | None:
         """
         Returns the singleton with the highest belief.
 
@@ -945,7 +1105,7 @@ class MassFunction(dict[frozenset[K], float]):
         """
         return self._max_singleton(self.bel)
 
-    def max_pl(self) -> frozenset[K] | None:
+    def max_pl(self) -> frozenset[E] | None:
         """
         Returns the singleton with the highest plausibility.
 
@@ -963,23 +1123,20 @@ class MassFunction(dict[frozenset[K], float]):
         else:
             return None
 
-    def to_dict(self) -> dict[K, float]:
+    def to_dict(self) -> dict[E, float]:
         """Convert a mass function only consisting of singletons to a dictionary by removing each enclosing frozenset."""
         if not self.is_probabilistic():
             raise NotProbabilisticError("mass function must only contain singletons")
         return {next(iter(h)): v for h, v in self.items()}
 
     @staticmethod
-    def from_dict(d: "MassFunction[K] | Mapping[K, float]") -> "MassFunction[K]":
+    def from_dict(d: "MassFunction[E] | Mapping[E, float]") -> "MassFunction[E]":
         """Convert a dictionary to a mass function by enclosing each key with a frozenset."""
         if isinstance(d, MassFunction):
             return d
         else:
-            # src: dict[frozenset[K], float]
-            src = {frozenset((h,)): v for h, v in d.items()}
-            # MassFunction wants: Mapping[Iterable[K], float]
-            # which is compatible?! but we still get an error
-            return MassFunction(src)  # type: ignore
+            src: dict[frozenset[E], float] = {frozenset((h,)): v for h, v in d.items()}
+            return MassFunction(src)
 
     @staticmethod
     def from_possibility(poss):
@@ -1237,7 +1394,7 @@ class MassFunction(dict[frozenset[K], float]):
                 raise ValueError(f"maxbel linear program failed: {result.message}")
 
             m_optimal = numpy.maximum(result.x, 0.0)
-            m_optimal[m_optimal < LP_ZERO_TOLERANCE] = 0.0
+            m_optimal[m_optimal < ZERO_TOLERANCE] = 0.0
 
             return MassFunction.from_array(m_optimal, H)
 
@@ -1342,7 +1499,7 @@ class MassFunction(dict[frozenset[K], float]):
         return MassFunction.from_possibility(poss)
 
 
-def powerset(iterable: Iterable[K]):
+def powerset(iterable: Iterable[E]):
     """
     Returns an iterator over the power set of 'set'.
 

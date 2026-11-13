@@ -1,6 +1,6 @@
 [project]
 name = "pyds"
-version = "0.7.0"
+version = "0.8.0"
 description = "Dempster-Shafer theory library"
 readme = "README.md"
 authors = [
