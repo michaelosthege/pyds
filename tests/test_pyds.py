@@ -465,6 +465,36 @@ class PyDSTest(unittest.TestCase):
         self.assertEqual(dict(out), dict(out.restrict({"b", "c"})))  # idempotent
         self.assertEqual({frozenset(): 1.0}, dict(m.restrict(frozenset())))
 
+    def test_discount(self):
+        theta = frozenset("abcd")
+        m = self.m1.discount(0.2, theta)
+        self.assertAlmostEqual(0.32, m["a"])
+        self.assertAlmostEqual(0.16, m["b"])
+        self.assertAlmostEqual(0.08, m["ad"])
+        self.assertAlmostEqual(0.44, m["abcd"])
+        self.assertAlmostEqual(1.0, fsum(m.values()))
+        # for ∅ ⊊ A ⊊ Θ: bel scales by (1 - rate), pl by (1 - rate) plus rate
+        for h in powerset(theta):
+            if h and h != theta:
+                self.assertAlmostEqual(0.8 * self.m1.bel(h), m.bel(h))
+                self.assertAlmostEqual(0.8 * self.m1.pl(h) + 0.2, m.pl(h))
+
+    def test_discount_unnormalized(self):
+        m = self.m3.discount(0.5, "abc")
+        self.assertAlmostEqual(0.2, m[""])  # conflict is discounted too
+        self.assertAlmostEqual(0.1, m["c"])
+        self.assertAlmostEqual(0.5, m["abc"])
+        self.assertAlmostEqual(fsum(self.m3.values()), fsum(m.values()))
+
+    def test_discount_repeated(self):
+        # reliabilities multiply: (m^0.25)^0.5 == m^0.625
+        theta = self.m1.implicit_frame()
+        self._assert_equal_belief(
+            self.m1.discount(0.625, theta),
+            self.m1.discount(0.25, theta).discount(0.5, theta),
+            10,
+        )
+
     def test_singletons(self):
         self.assertSetEqual(
             {frozenset("a"), frozenset("b"), frozenset("c"), frozenset("d")},

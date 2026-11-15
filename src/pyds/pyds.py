@@ -83,10 +83,13 @@ class MassFunction(dict[frozenset[E], float]):
     def simple_support(
         cls, hypothesis: Iterable[E], degree: float, theta: Iterable[E]
     ) -> "MassFunction[E]":
-        """Simple focused support function focused at `hypothesis`: m(`hypothesis`) = `degree`, m(`theta`) = 1 - `degree`.
+        """Simple support function focused at `hypothesis`: m(`hypothesis`) = `degree`, m(`theta`) = 1 - `degree`.
 
         `theta` must be given explicitly because a BPA alone does not distinguish a certain singleton belief, e.g. `m({P}) = 1.0`,
         from ignorance over a singleton frame, e.g. `m(Θ) = 1.0` where `Θ = {P}`.
+
+        For more details, see:
+            G. Shafer (1976), A Mathematical Theory of Evidence, Princeton U. P., Princeton
         """
         hypothesis = MassFunction._convert(hypothesis)
         theta = MassFunction._convert(theta)
@@ -298,7 +301,7 @@ class MassFunction(dict[frozenset[E], float]):
 
         The union is non-increasing under :meth:`combine_conjunctive`, since focal sets are intersected. That correctly describes
         the resulting belief, but makes this method unsuitable as a source of Θ for operations that place mass on the top set:
-        pass Θ explicitly to :meth:`simple_support` and :meth:`expand_frame`.
+        pass Θ explicitly to :meth:`simple_support`, :meth:`expand_frame`, and :meth:`discount`.
         """
         if not self:
             return frozenset()
@@ -413,6 +416,30 @@ class MassFunction(dict[frozenset[E], float]):
         if conflicting_mass:
             out[hypothesis] += conflicting_mass
         return out
+
+    def discount(self, rate: float, theta: Iterable[E]) -> "MassFunction[E]":
+        """Shafer's discounting with unreliability `rate` ∈ [0, 1] (reliability = 1 - `rate`):
+        m'(A) = (1 - rate)·m(A) for A ⊊ Θ, and m'(Θ) = (1 - rate)·m(Θ) + rate.
+
+        `theta` must be given explicitly for the same reason as in :meth:`simple_support`.
+
+        Mass-preserving: ∅ is discounted like any other proper subset, so unnormalized inputs stay unnormalized.
+
+        For more details, see:
+            G. Shafer (1976), A Mathematical Theory of Evidence, Princeton U. P., Princeton
+        """
+        if not 0.0 <= rate <= 1.0:
+            raise ValueError(f"rate {rate} must be in [0, 1]")
+        theta = MassFunction._convert(theta)
+        if not self.implicit_frame() <= theta:
+            raise ValueError(f"theta {theta} must contain all stored hypotheses")
+        if rate == 0.0:
+            return self.copy()
+        if rate == 1.0:
+            return MassFunction.vacuous(theta)
+        discounted = self * (1.0 - rate)
+        discounted[theta] += rate
+        return discounted
 
     @overload
     def bel(self, hypothesis: None = None) -> Mapping[frozenset[E], float]: ...
