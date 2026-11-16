@@ -403,7 +403,7 @@ class MassFunction(dict[frozenset[E], float]):
     def restrict(self, hypothesis: Iterable[E]) -> "MassFunction[E]":
         """Conditions on `hypothesis`, transferring conflicting mass to it instead of normalizing.
 
-        It is mass-preserving. Unlike Dempster conditioning (:meth:`condition`), conflict is not redistributed,
+        It is unnormalized conditioning, unlike default (:meth:`condition`). Conflict is not redistributed,
         so beliefs are not inflated.
 
         Doesn't yield conflict unless `hypothesis` is empty, in which case total conflict is returned.
@@ -423,7 +423,7 @@ class MassFunction(dict[frozenset[E], float]):
 
         `theta` must be given explicitly for the same reason as in :meth:`simple_support`.
 
-        Mass-preserving: ∅ is discounted like any other proper subset, so unnormalized inputs stay unnormalized.
+        ∅ is discounted like any other proper subset, so unnormalized inputs stay unnormalized.
 
         For more details, see:
             G. Shafer (1976), A Mathematical Theory of Evidence, Princeton U. P., Princeton
