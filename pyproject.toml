@@ -40,10 +40,6 @@ documentation = "https://github.com/reineking/pyds"
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-package-dir = {"" = "src"}
-py-modules = ["pyds"]
-
 [tool.coverage.run]
 omit = [
     # exclude tests files from coverage calculation
