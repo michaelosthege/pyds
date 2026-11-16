@@ -1,8 +1,8 @@
 import importlib.metadata
 
-from .pyds import (
+from pyds.exceptions import NotProbabilisticError, TotalConflictError
+from pyds.pyds import (
     MassFunction,
-    NotProbabilisticError,
     gbt_bel,
     gbt_m,
     gbt_pignistic,
@@ -12,9 +12,10 @@ from .pyds import (
 )
 
 __version__ = importlib.metadata.version(__package__ or __name__)
-__all__ = (
+__all__ = [
     "MassFunction",
     "NotProbabilisticError",
+    "TotalConflictError",
     "__version__",
     "gbt_bel",
     "gbt_m",
@@ -22,4 +23,4 @@ __all__ = (
     "gbt_pl",
     "gbt_q",
     "powerset",
-)
+]
